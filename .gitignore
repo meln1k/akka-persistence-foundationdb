@@ -1,0 +1,33 @@
+# sbt
+bin/
+target/
+build/
+
+# eclipse
+build
+.classpath
+.project
+.settings
+.worksheet
+
+# intellij idea
+*.log
+*.iml
+*.ipr
+*.iws
+.idea
+
+# mac
+.DS_Store
+
+# other?
+.history
+.scala_dependencies
+.cache
+.cache-main
+
+#general
+*.class%
+
+#fdb jars
+lib/fdb-java*.jar
