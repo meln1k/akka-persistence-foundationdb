@@ -203,24 +203,28 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     val to = logDir.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
     implicit val tcx = db
 
-    if (max == 0) {
-      Future.successful(())
-    } else {
-      RangeRead
-        .rangeSource(from, to, max.toInt)
-        .map { kv =>
-          val key = Tuple.fromBytes(kv.getKey)
-          key.getLong(3) match {
-            case EVENT_TAG_COMPACT =>
-              bytes2PersistentRepr(kv.getValue)
-            case EVENT_TAG_RICH =>
-              bytes2PersistentRepr(kv.getValue.drop(Versionstamp.LENGTH))
-          }
-        }
-        .map(recoveryCallback)
-        .runWith(Sink.ignore)
-        .map(_ => ())
+    //TODO: correctly handle values which can't fit into Int
+    val limit = max match {
+      case Long.MaxValue => None
+      case long if long >= Int.MaxValue => Some(Int.MaxValue)
+      case int => Some(int.toInt)
     }
+
+    RangeRead
+      .longRunningRangeSource(from, to, limit)
+      .map { kv =>
+        val key = Tuple.fromBytes(kv.getKey)
+        key.getLong(3) match {
+          case EVENT_TAG_COMPACT =>
+            bytes2PersistentRepr(kv.getValue)
+          case EVENT_TAG_RICH =>
+            bytes2PersistentRepr(kv.getValue.drop(Versionstamp.LENGTH))
+        }
+      }
+      .map(recoveryCallback)
+      .runWith(Sink.ignore)
+      .map(_ => ())
+
   }
 
   override def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = {

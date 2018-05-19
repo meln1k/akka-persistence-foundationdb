@@ -6,27 +6,82 @@ import akka.{Done, NotUsed}
 import akka.stream.scaladsl.Source
 import com.apple.foundationdb.async.AsyncIterator
 import com.apple.foundationdb.tuple.Tuple
-import com.apple.foundationdb.{FDBException, KeySelector, KeyValue, StreamingMode, Transaction, TransactionContext, Range => FdbRange}
+import com.apple.foundationdb.{FDBException, KeySelector, KeyValue, ReadTransaction, StreamingMode, Transaction, TransactionContext}
 
 import scala.compat.java8.FutureConverters._
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
 object RangeRead {
 
-  def rangeSource(from: Array[Byte], to: Array[Byte], limit: Int)(implicit tcx: TransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+  /**
+    * Wrapper around [[rangeSource]] which can be used for doing long-running (more than 5 seconds) non-transactional queries.
+    * @param from inclusive
+    * @param to exclusive
+    * @param limit None - no limit
+    * @param tcx
+    * @param ec
+    * @return
+    */
+  def longRunningRangeSource(from: Array[Byte], to: Array[Byte], limit: Option[Int])(implicit tcx: TransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
 
-    @volatile var downloadState: QueryState = InProgress
+    @volatile var currentPosition: Array[Byte] = from
 
-    @volatile var start: Array[Byte] = from
 
     val validatedLimit = limit match {
-      case n if n < 0 => 0
-      case ok => ok
+      case None => ReadTransaction.ROW_LIMIT_UNLIMITED
+      case Some(n) if n < 0 => throw new IllegalArgumentException("row limit can't be negative")
+      case Some(n) => n
     }
 
     val elementsLeft: AtomicInteger = new AtomicInteger(validatedLimit)
 
-    def rangeDownload = Source.unfoldResourceAsync[(KeyValue, Tuple), (AsyncIterator[KeyValue], Promise[NotUsed])](
+    def recursiveRangeSource: Source[KeyValue, NotUsed] = {
+      rangeSource(
+        begin = KeySelector.firstGreaterOrEqual(from),
+        end = KeySelector.firstGreaterOrEqual(to),
+        limit = elementsLeft.get(),
+        mode = StreamingMode.WANT_ALL
+      )
+      .map { kv =>
+        currentPosition = Tuple.fromBytes(kv.getKey).range().begin
+        elementsLeft.decrementAndGet()
+        kv
+      }
+      .recoverWithRetries(-1, {
+        case ex: FDBException if ex.getCode == 1007 =>
+          recursiveRangeSource
+      })
+    }
+
+    limit match {
+      case Some(0) =>
+        Source.empty
+      case _ =>
+        recursiveRangeSource
+    }
+  }
+
+  /**
+    * Wrapper around [[ReadTransaction#getRange]] that represents [[com.apple.foundationdb.async.AsyncIterable]] as a [[Source]].
+    *
+    * @param begin the beginning of the range (inclusive)
+    * @param end the end of the range (exclusive)
+    * @param limit the maximum number of results to return. Limits results to the first keys in the range.
+    *              Pass ROW_LIMIT_UNLIMITED if this query should not limit the number of results.
+    *              If reverse is true rows will be limited starting at the end of the range.
+    * @param reverse return results starting at the end of the range in reverse order
+    * @param mode provide a hint about how the results are to be used. This can provide speed improvements or
+    *             efficiency gains based on the caller's knowledge of the upcoming access pattern.
+    * @param tcx transaction context
+    * @param ec execution context
+    * @return [[Source]] with the elements of the range
+    */
+  def rangeSource(begin: KeySelector,
+                  end: KeySelector,
+                  limit: Int = ReadTransaction.ROW_LIMIT_UNLIMITED,
+                  reverse: Boolean = false, mode: StreamingMode = StreamingMode.ITERATOR)
+                 (implicit tcx: TransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+    Source.unfoldResourceAsync[KeyValue, (AsyncIterator[KeyValue], Promise[NotUsed])](
       () => {
         val transactionPromise = Promise[Transaction]()
         val resultPromise = Promise[NotUsed]()
@@ -36,23 +91,16 @@ object RangeRead {
         }
         transactionPromise.future.map {
           tr =>
-            val res = tr.getRange(start, to, elementsLeft.get(), false, StreamingMode.WANT_ALL)
+            val res = tr.getRange(begin, end, limit, reverse, mode)
             res.iterator() -> resultPromise
         }
       },
       {
         case (iterator, resultPromise) => iterator.onHasNext().toScala.map {
-          case t if t =>
-            val next = iterator.next()
-            val keyTuple = Tuple.fromBytes(next.getKey)
-            Some(next -> keyTuple)
+          case java.lang.Boolean.TRUE =>
+            Some(iterator.next())
           case _ =>
             resultPromise.trySuccess(NotUsed)
-            val newState = downloadState match {
-              case InProgress => Finished
-              case WasRestarted => InProgress
-            }
-            downloadState = newState
             None
         }
       },
@@ -65,34 +113,5 @@ object RangeRead {
           }
       }
     )
-
-
-    def recursiveRangeDownload: Source[KeyValue, NotUsed] = {
-      if (downloadState == Finished) {
-        Source.empty
-      } else {
-        rangeDownload
-          .map { case (kv, t) =>
-            start = t.range().begin
-            elementsLeft.decrementAndGet()
-            kv
-          }
-          .recoverWithRetries(-1,{
-            case ex: FDBException if ex.getCode == 1007 =>
-              downloadState = WasRestarted
-              recursiveRangeDownload
-          })
-      }
-    }
-
-    recursiveRangeDownload
-
   }
-
 }
-
-
-sealed trait QueryState
-case object InProgress extends QueryState
-case object WasRestarted extends QueryState
-case object Finished extends QueryState
