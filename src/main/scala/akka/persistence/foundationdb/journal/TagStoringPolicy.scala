@@ -43,30 +43,8 @@ object TagStoringPolicy {
     */
   case object AlwaysCompact extends TagStoringPolicy
 
-  def fromConfig(cfg: Config): TagStoringPolicy = {
-    cfg.getString("tag-storing-policy") match {
-      case "AlwaysRich" =>
-        AlwaysRich
-      case "DefaultRich" =>
-        val compactTags = cfg.getStringList("compact-tags").asScala.toSet
-        if (compactTags.isEmpty) {
-          AlwaysRich
-        } else {
-          DefaultRich(compactTags)
-        }
-      case "DefaultCompact" =>
-        val richTags = cfg.getStringList("rich-tags").asScala.toSet
-        if (richTags.isEmpty) {
-          AlwaysCompact
-        } else {
-          DefaultCompact(richTags)
-        }
-      case "AlwaysCompact" =>
-        AlwaysCompact
-      case unknown =>
-        throw new IllegalArgumentException(s"Unknown tag storing policy: $unknown")
 
-    }
-  }
+  val EVENT_TAG_RICH = 0L
+  val EVENT_TAG_COMPACT = 1L
 
 }

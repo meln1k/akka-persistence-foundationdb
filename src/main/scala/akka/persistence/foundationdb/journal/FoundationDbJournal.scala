@@ -12,59 +12,38 @@ import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.util.ByteString
 import com.apple.foundationdb.{MutationType, Transaction}
 import com.apple.foundationdb.async.AsyncUtil
-import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
 import com.typesafe.config.Config
+import akka.persistence.foundationdb.util.TupleOps._
 
 import scala.collection.immutable
 import scala.concurrent.Future
 import scala.util.{Failure, Success, Try}
 import scala.compat.java8.FutureConverters._
-import scala.collection.JavaConverters._
 import scala.util.control.NonFatal
+import TagStoringPolicy._
 
 class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
 
-  import com.apple.foundationdb.FDB
+  val config = new FoundationDbJournalConfig(cfg)
 
-  val fdb = FDB.selectAPIVersion(510)
+  import config._
 
-  val db = fdb.open()
-
-
-  val directoryLayer = new DirectoryLayer()
-
-  val pluginDirectory = directoryLayer.createOrOpen(db, List("fdb-journal").asJava).get()
-
-  val tagDir = pluginDirectory.createOrOpen(db, List("tag").asJava).get()
-  val logDir = pluginDirectory.createOrOpen(db, List("log").asJava).get()
-  val seqNoDir = pluginDirectory.createOrOpen(db, List("seqNo").asJava).get()
-
-  val tagStoringPolicy: TagStoringPolicy = TagStoringPolicy.AlwaysCompact
-
-  val EVENT_TAG_RICH = 0L
-  val EVENT_TAG_COMPACT = 1L
 
   val serialization = SerializationExtension(context.system)
-
 
   import context.dispatcher
 
   implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
-
   def persistentRepr2Bytes(p: PersistentRepr): Array[Byte] = serialization.serialize(p).get
-  def bytes2PersistentRepr(a: Array[Byte]): PersistentRepr = serialization.deserialize(a, classOf[PersistentRepr]).get
-
-  def persistentReprId2Tuple(persistenceId: String, sequenceNr: Long): Tuple = {
-    Tuple.from(persistenceId, sequenceNr: java.lang.Long)
-  }
+  def bytes2PersistentRepr(bytes: Array[Byte]): PersistentRepr = serialization.deserialize(bytes, classOf[PersistentRepr]).get
 
   def insertCompactTag(tr: Transaction, tag: String, persistenceId: String, sequenceNr: Long, messageNr: Int): Unit = {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_KEY,
-      tagDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_COMPACT: java.lang.Long)),
+      tagsDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_COMPACT: java.lang.Long)),
       persistentReprId2Tuple(persistenceId, sequenceNr).pack()
     )
   }
@@ -72,22 +51,22 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   def insertRichTag(tr: Transaction, tag: String, persistentRepr: PersistentRepr, messageNr: Int): Unit = {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_KEY,
-      tagDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_RICH: java.lang.Long)),
+      tagsDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_RICH: java.lang.Long)),
       Tuple.from(persistentRepr2Bytes(persistentRepr)).pack()
     )
   }
 
-  def insertCompactEventLog(tr: Transaction, persistentRepr: PersistentRepr) = {
+  def insertCompactEventLog(tr: Transaction, persistentRepr: PersistentRepr): Unit = {
     tr.set(
-      logDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_COMPACT: java.lang.Long)),
+      logsDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_COMPACT: java.lang.Long)),
        persistentRepr2Bytes(persistentRepr)
     )
   }
 
-  def insertRichEventLog(tr: Transaction, persistentRepr: PersistentRepr, messageNr: Int) = {
+  def insertRichEventLog(tr: Transaction, persistentRepr: PersistentRepr, messageNr: Int): Unit = {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_VALUE,
-      logDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_RICH: java.lang.Long)),
+      logsDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_RICH: java.lang.Long)),
       {
         ByteString.newBuilder
           .putBytes(Versionstamp.incomplete(messageNr).getBytes)
@@ -98,9 +77,10 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     )
   }
 
-  val storePersistentRepr: (Transaction, PersistentRepr, Set[String], Int) => Unit = (tr, persistentRepr, tags, messageNr) =>
+  val storePersistentRepr: (Transaction, PersistentRepr, Set[String], Int) => Unit =
     tagStoringPolicy match {
       case TagStoringPolicy.DefaultCompact(richTags) =>
+        (tr, persistentRepr, tags, messageNr) =>
         val currentRichTags = richTags intersect tags
         val noRichTags = currentRichTags.isEmpty
         val currentCompactTags = if (noRichTags) {
@@ -117,10 +97,12 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
         }
 
       case TagStoringPolicy.AlwaysCompact =>
+        (tr, persistentRepr, tags, messageNr) =>
         tags.foreach(tag => insertCompactTag(tr, tag, persistentRepr.persistenceId, persistentRepr.sequenceNr, messageNr))
         insertCompactEventLog(tr, persistentRepr)
 
       case TagStoringPolicy.DefaultRich(compactTags) =>
+        (tr, persistentRepr, tags, messageNr) =>
         val currentCompactTags = compactTags intersect tags
         val noCompactTags = currentCompactTags.isEmpty
         val currentRichTags = if (noCompactTags) {
@@ -133,6 +115,7 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
         insertRichEventLog(tr, persistentRepr, messageNr)
 
       case TagStoringPolicy.AlwaysRich =>
+        (tr, persistentRepr, tags, messageNr) =>
         tags.foreach(tag => insertRichTag(tr, tag, persistentRepr, messageNr))
         insertRichEventLog(tr, persistentRepr, messageNr)
     }
@@ -187,8 +170,8 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
           case _ => toSequenceNr + 1
         }
         db.runAsync { tr =>
-          val from = logDir.pack(persistentReprId2Tuple(persistenceId, 0L))
-          val to   = logDir.pack(persistentReprId2Tuple(persistenceId, normalizedSeqNo))
+          val from = logsDir.pack(persistentReprId2Tuple(persistenceId, 0L))
+          val to   = logsDir.pack(persistentReprId2Tuple(persistenceId, normalizedSeqNo))
           tr.clear(from, to)
           CompletableFuture.completedFuture(())
         }.toScala
@@ -199,9 +182,8 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   }
 
   override def asyncReplayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(recoveryCallback: PersistentRepr => Unit): Future[Unit] = {
-    val from = logDir.pack(persistentReprId2Tuple(persistenceId, fromSequenceNr))
-    val to = logDir.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
-    implicit val tcx = db
+    val from = logsDir.pack(persistentReprId2Tuple(persistenceId, fromSequenceNr))
+    val to = logsDir.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
 
     //TODO: correctly handle values which can't fit into Int
     val limit = max match {

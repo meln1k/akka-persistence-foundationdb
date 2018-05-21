@@ -6,12 +6,16 @@ import akka.{Done, NotUsed}
 import akka.stream.scaladsl.Source
 import com.apple.foundationdb.async.AsyncIterator
 import com.apple.foundationdb.tuple.Tuple
-import com.apple.foundationdb.{FDBException, KeySelector, KeyValue, ReadTransaction, StreamingMode, Transaction, TransactionContext}
+import com.apple.foundationdb.{FDBException, KeySelector, KeyValue, ReadTransaction, StreamingMode, Transaction, TransactionContext, Range => FdbRange}
 
 import scala.compat.java8.FutureConverters._
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
 object RangeRead {
+
+  def longRunningRangeSource(range: FdbRange, limit: Option[Int])(implicit tcx: TransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+    longRunningRangeSource(range.begin, range.end, limit)
+  }
 
   /**
     * Wrapper around [[rangeSource]] which can be used for doing long-running (more than 5 seconds) non-transactional queries.
@@ -35,11 +39,18 @@ object RangeRead {
 
     val elementsLeft: AtomicInteger = new AtomicInteger(validatedLimit)
 
+    def getLimit(): Int = {
+      limit match {
+        case None => ReadTransaction.ROW_LIMIT_UNLIMITED
+        case _ => elementsLeft.get()
+      }
+    }
+
     def recursiveRangeSource: Source[KeyValue, NotUsed] = {
       rangeSource(
         begin = KeySelector.firstGreaterOrEqual(from),
         end = KeySelector.firstGreaterOrEqual(to),
-        limit = elementsLeft.get(),
+        limit = getLimit(),
         mode = StreamingMode.WANT_ALL
       )
       .map { kv =>

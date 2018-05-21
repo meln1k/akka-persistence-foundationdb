@@ -10,7 +10,10 @@ import com.typesafe.config.ConfigFactory
 import scala.collection.JavaConverters._
 
 class FoundationDbJournalSpec extends JournalSpec(
-  config = ConfigFactory.load()) {
+  config = ConfigFactory.parseString(
+    """
+      |akka.persistence.journal.plugin = "foundationdb-journal"
+    """.stripMargin).withFallback(ConfigFactory.load())) {
 
   var db: Database = _
 
