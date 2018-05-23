@@ -1,23 +1,24 @@
 package akka.persistence.foundationdb.journal
 
 import akka.persistence.CapabilityFlag
-import akka.persistence.journal.JournalSpec
-import com.apple.foundationdb.directory.{DirectoryLayer, DirectorySubspace}
-import com.apple.foundationdb.{Database, FDB, Range => FdbRange}
-import com.apple.foundationdb.tuple.Tuple
+import akka.persistence.journal.JournalPerfSpec
+import akka.persistence.journal.JournalPerfSpec.ResetCounter
+import akka.testkit.TestProbe
+import com.apple.foundationdb.{Database, FDB}
 import com.typesafe.config.ConfigFactory
+import concurrent.duration._
 
-import scala.collection.JavaConverters._
-
-class FoundationDbJournalSpec extends JournalSpec(
+class FoundationDbJournalPerfSpec extends JournalPerfSpec(
   config = ConfigFactory.parseString(
     """
       |akka.persistence.journal.plugin = "foundationdb-journal"
       |foundationdb-journal.tag-storing-policy = "AlwaysCompact"
-      |foundationdb-journal.plugin-directory = "fdb-journal-tests"
+      |foundationdb-journal.plugin-directory = "fdb-journal--perf-tests"
     """.stripMargin).withFallback(ConfigFactory.load())) {
+  override protected def supportsRejectingNonSerializableObjects: CapabilityFlag = false
 
   var db: Database = _
+
 
   protected override def beforeAll(): Unit = {
     val fdb = FDB.selectAPIVersion(510)
@@ -46,15 +47,14 @@ class FoundationDbJournalSpec extends JournalSpec(
 
   }
 
-
-  protected override def beforeEach(): Unit = {
-    super.beforeEach()
-  }
-
   protected override def afterAll(): Unit = {
     super.afterAll()
     db.close()
   }
 
-  override def supportsRejectingNonSerializableObjects: CapabilityFlag = false // or CapabilityFlag.off
+  override def awaitDurationMillis: Long = 20000
+
+  override def eventsCount: Int = 200
+
+
 }

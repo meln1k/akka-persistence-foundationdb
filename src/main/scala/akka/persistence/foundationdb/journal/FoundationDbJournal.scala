@@ -22,18 +22,17 @@ import scala.util.{Failure, Success, Try}
 import scala.compat.java8.FutureConverters._
 import scala.util.control.NonFatal
 import TagStoringPolicy._
+import akka.persistence.foundationdb.util.KeySerializers._
 
 class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
-
 
   val config = new FoundationDbJournalConfig(cfg)
 
   import config._
 
-
   val serialization = SerializationExtension(context.system)
 
-  import context.dispatcher
+  implicit val dispatcher = context.system.dispatchers.lookup("foundationdb-plugin-default-dispatcher")
 
   implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
@@ -41,6 +40,15 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   def bytes2PersistentRepr(bytes: Array[Byte]): PersistentRepr = serialization.deserialize(bytes, classOf[PersistentRepr]).get
 
   def insertCompactTag(tr: Transaction, tag: String, persistenceId: String, sequenceNr: Long, messageNr: Int): Unit = {
+    val shardId = TagWatchShards.get(tag).map(s => persistenceId.hashCode % s).getOrElse(0)
+    tr.mutate(
+      MutationType.SET_VERSIONSTAMPED_VALUE,
+      tagWatchKey(tagWatchDir, tag, shardId),
+      ByteString.newBuilder
+        .putBytes(Versionstamp.incomplete(messageNr).getBytes)
+        .result()
+        .toArray
+    )
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_KEY,
       tagsDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_COMPACT: java.lang.Long)),
@@ -49,6 +57,15 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   }
 
   def insertRichTag(tr: Transaction, tag: String, persistentRepr: PersistentRepr, messageNr: Int): Unit = {
+    val shardId = TagWatchShards.get(tag).map(s => persistentRepr.persistenceId.hashCode % s).getOrElse(0)
+    tr.mutate(
+      MutationType.SET_VERSIONSTAMPED_VALUE,
+      tagWatchKey(tagWatchDir, tag, shardId),
+      ByteString.newBuilder
+        .putBytes(Versionstamp.incomplete(messageNr).getBytes)
+        .result()
+        .toArray
+    )
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_KEY,
       tagsDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_RICH: java.lang.Long)),

@@ -30,7 +30,6 @@ object RangeRead {
 
     @volatile var currentPosition: Array[Byte] = from
 
-
     val validatedLimit = limit match {
       case None => ReadTransaction.ROW_LIMIT_UNLIMITED
       case Some(n) if n < 0 => throw new IllegalArgumentException("row limit can't be negative")
@@ -94,9 +93,9 @@ object RangeRead {
                  (implicit tcx: TransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
     Source.unfoldResourceAsync[KeyValue, (AsyncIterator[KeyValue], Promise[NotUsed])](
       () => {
-        val transactionPromise = Promise[Transaction]()
+        val transactionPromise = Promise[ReadTransaction]()
         val resultPromise = Promise[NotUsed]()
-        tcx.runAsync { tr =>
+        tcx.readAsync { tr =>
           transactionPromise.trySuccess(tr)
           resultPromise.future.toJava.toCompletableFuture
         }

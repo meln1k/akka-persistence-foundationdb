@@ -13,15 +13,24 @@ class FoundationDbPluginConfig(config: Config) {
 
   implicit val db = fdb.open()
 
-  private val directoryLayer = new DirectoryLayer()
+  protected val directoryLayer = new DirectoryLayer()
 
-  protected val pluginDirectory = directoryLayer.createOrOpen(db, List("fdb-journal").asJava).get()
+  val pluginDirectory = directoryLayer.createOrOpen(db, List(config.getString("plugin-directory")).asJava).get()
 
   val tagsDir = pluginDirectory.createOrOpen(db, List("tags").asJava).get()
   val logsDir = pluginDirectory.createOrOpen(db, List("logs").asJava).get()
   val seqNoDir = pluginDirectory.createOrOpen(db, List("seqNo").asJava).get()
   val tagWatchDir = pluginDirectory.createOrOpen(db, List("tagWatches").asJava).get()
 
+
+  val TagWatchShards: Map[String, Int] = config
+    .getObject("tag-watch-shards")
+    .asScala
+    .map { case (tagName, shards) =>
+      val nrOfShards = shards.unwrapped().asInstanceOf[java.lang.Integer].toInt
+      require(nrOfShards > 0, "number of shards must be positive")
+      tagName -> nrOfShards
+    }.toMap
 
 
 }
