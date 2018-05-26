@@ -8,9 +8,6 @@ import scala.collection.JavaConverters._
 
 class FoundationDbJournalConfig(config: Config) extends FoundationDbPluginConfig(config) {
 
-
-
-
   val tagStoringPolicy: TagStoringPolicy = {
     config.getString("tag-storing-policy") match {
       case "AlwaysRich" =>

@@ -13,18 +13,19 @@ import akka.stream.scaladsl.Source
 import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
 import com.typesafe.config.Config
 import akka.persistence.foundationdb.journal.TagStoringPolicy._
+import akka.persistence.foundationdb.serialization.FdbSerializer
 import akka.persistence.foundationdb.util.KeySerializers.tagWatchKey
 import akka.persistence.foundationdb.util.TupleOps._
 import akka.serialization.SerializationExtension
 import com.apple.foundationdb.TransactionContext
 import com.apple.foundationdb.async.AsyncUtil
+import akka.persistence.foundationdb.util.TupleOps._
 
 import scala.compat.java8.FutureConverters._
 import scala.concurrent.Future
 
 class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
   extends ReadJournal
-    with PersistenceIdsQuery
     with CurrentPersistenceIdsQuery
     with EventsByPersistenceIdQuery
     with CurrentEventsByPersistenceIdQuery
@@ -45,15 +46,61 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
     }.toScala.map(_.toScala.map(_ => Done)).flatten
   }
 
-  override def persistenceIds(): Source[String, NotUsed] = ???
+  val fdbSerializer = new FdbSerializer(serialization)
 
   override def currentPersistenceIds(): Source[String, NotUsed] = {
-    RangeRead.longRunningRangeSource(seqNoDir.)
+    val range = seqNoDir.range()
+    RangeRead.longRunningRangeSource(range, None).map { kv =>
+      val persistentId = Tuple.fromBytes(kv.getKey).getString(1)
+      persistentId
+    }
   }
 
-  override def eventsByPersistenceId(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long): Source[EventEnvelope, NotUsed] = ???
+  override def eventsByPersistenceId(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long): Source[EventEnvelope, NotUsed] = {
+    @volatile var currentSeqNo: Long = fromSequenceNr
+    def stopWhenReachedEnd() = if (currentSeqNo >= toSequenceNr) Some(NotUsed -> NotUsed) else None
+    Source.unfold(NotUsed)(_ => stopWhenReachedEnd())
+      .mapAsync(1) { _ =>
+        watch(seqNoDir.pack(Tuple.from(persistenceId)))
+      }
+      .prepend(Source.single(Done)) //to start without any watch triggered
+      .flatMapConcat(_ => currentEventsByPersistenceId(persistenceId, currentSeqNo, toSequenceNr))
+      .map { eventEnv =>
+        currentSeqNo = eventEnv.sequenceNr
+        eventEnv
+      }
+  }
 
-  override def currentEventsByPersistenceId(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long): Source[EventEnvelope, NotUsed] = ???
+  override def currentEventsByPersistenceId(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long): Source[EventEnvelope, NotUsed] = {
+    if (fromSequenceNr > toSequenceNr) {
+      Source.empty
+    } else {
+      val from = eventLogDir.pack(persistentReprId2Tuple(persistenceId, fromSequenceNr))
+      val to = eventLogDir.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
+      RangeRead.longRunningRangeSource(from, to, None)
+        .map { kv =>
+          val key = Tuple.fromBytes(kv.getKey)
+          key.getLong(3) match {
+            case EVENT_TAG_COMPACT =>
+              val pr = bytes2PersistentRepr(kv.getValue)
+              EventEnvelope(
+                NoOffset,
+                pr.persistenceId,
+                pr.sequenceNr,
+                pr.payload
+              )
+            case EVENT_TAG_RICH =>
+              val pr = bytes2PersistentRepr(kv.getValue.drop(Versionstamp.LENGTH))
+              EventEnvelope(
+                NoOffset,
+                pr.persistenceId,
+                pr.sequenceNr,
+                pr.payload
+              )
+          }
+        }
+    }
+  }
 
   override def eventsByTag(tag: String, offset: Offset): Source[EventEnvelope, NotUsed] = {
     @volatile var currentOffset: Offset = offset
@@ -72,7 +119,7 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
   }
 
   private def getPersistentRepr(tuple: Tuple): Future[Option[PersistentRepr]] = {
-    val key = logsDir.pack(tuple)
+    val key = eventLogDir.pack(tuple)
 
     val tr: CompletableFuture[Array[Byte]] = db.readAsync { tr =>
       tr.get(key)

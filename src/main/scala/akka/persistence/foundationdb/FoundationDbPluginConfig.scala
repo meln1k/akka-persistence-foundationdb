@@ -18,7 +18,7 @@ class FoundationDbPluginConfig(config: Config) {
   val pluginDirectory = directoryLayer.createOrOpen(db, List(config.getString("plugin-directory")).asJava).get()
 
   val tagsDir = pluginDirectory.createOrOpen(db, List("tags").asJava).get()
-  val logsDir = pluginDirectory.createOrOpen(db, List("logs").asJava).get()
+  val eventLogDir = pluginDirectory.createOrOpen(db, List("logs").asJava).get()
   val seqNoDir = pluginDirectory.createOrOpen(db, List("seqNo").asJava).get()
   val tagWatchDir = pluginDirectory.createOrOpen(db, List("tagWatches").asJava).get()
 

@@ -22,6 +22,7 @@ import scala.util.{Failure, Success, Try}
 import scala.compat.java8.FutureConverters._
 import scala.util.control.NonFatal
 import TagStoringPolicy._
+import akka.persistence.foundationdb.serialization.FdbSerializer
 import akka.persistence.foundationdb.util.KeySerializers._
 
 class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
@@ -32,12 +33,13 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
   val serialization = SerializationExtension(context.system)
 
+  val fdbSerializer = new FdbSerializer(serialization)
+
   implicit val dispatcher = context.system.dispatchers.lookup("foundationdb-plugin-default-dispatcher")
 
   implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
-  def persistentRepr2Bytes(p: PersistentRepr): Array[Byte] = serialization.serialize(p).get
-  def bytes2PersistentRepr(bytes: Array[Byte]): PersistentRepr = serialization.deserialize(bytes, classOf[PersistentRepr]).get
+
 
   def insertCompactTag(tr: Transaction, tag: String, persistenceId: String, sequenceNr: Long, messageNr: Int): Unit = {
     val shardId = TagWatchShards.get(tag).map(s => persistenceId.hashCode % s).getOrElse(0)
@@ -69,25 +71,25 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_KEY,
       tagsDir.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_RICH: java.lang.Long)),
-      Tuple.from(persistentRepr2Bytes(persistentRepr)).pack()
+      Tuple.from(fdbSerializer.persistentRepr2Bytes(persistentRepr)).pack()
     )
   }
 
   def insertCompactEventLog(tr: Transaction, persistentRepr: PersistentRepr): Unit = {
     tr.set(
-      logsDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_COMPACT: java.lang.Long)),
-       persistentRepr2Bytes(persistentRepr)
+      eventLogDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_COMPACT: java.lang.Long)),
+      fdbSerializer.persistentRepr2Bytes(persistentRepr)
     )
   }
 
   def insertRichEventLog(tr: Transaction, persistentRepr: PersistentRepr, messageNr: Int): Unit = {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_VALUE,
-      logsDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_RICH: java.lang.Long)),
+      eventLogDir.pack(Tuple.from(persistentRepr.persistenceId, persistentRepr.sequenceNr: java.lang.Long, EVENT_TAG_RICH: java.lang.Long)),
       {
         ByteString.newBuilder
           .putBytes(Versionstamp.incomplete(messageNr).getBytes)
-          .putBytes(persistentRepr2Bytes(persistentRepr))
+          .putBytes(fdbSerializer.persistentRepr2Bytes(persistentRepr))
           .result()
           .toArray
       }
@@ -187,8 +189,8 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
           case _ => toSequenceNr + 1
         }
         db.runAsync { tr =>
-          val from = logsDir.pack(persistentReprId2Tuple(persistenceId, 0L))
-          val to   = logsDir.pack(persistentReprId2Tuple(persistenceId, normalizedSeqNo))
+          val from = eventLogDir.pack(persistentReprId2Tuple(persistenceId, 0L))
+          val to   = eventLogDir.pack(persistentReprId2Tuple(persistenceId, normalizedSeqNo))
           tr.clear(from, to)
           CompletableFuture.completedFuture(())
         }.toScala
@@ -199,8 +201,8 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   }
 
   override def asyncReplayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(recoveryCallback: PersistentRepr => Unit): Future[Unit] = {
-    val from = logsDir.pack(persistentReprId2Tuple(persistenceId, fromSequenceNr))
-    val to = logsDir.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
+    val from = eventLogDir.pack(persistentReprId2Tuple(persistenceId, fromSequenceNr))
+    val to = eventLogDir.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
 
     //TODO: correctly handle values which can't fit into Int
     val limit = max match {
@@ -211,15 +213,7 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
     RangeRead
       .longRunningRangeSource(from, to, limit)
-      .map { kv =>
-        val key = Tuple.fromBytes(kv.getKey)
-        key.getLong(3) match {
-          case EVENT_TAG_COMPACT =>
-            bytes2PersistentRepr(kv.getValue)
-          case EVENT_TAG_RICH =>
-            bytes2PersistentRepr(kv.getValue.drop(Versionstamp.LENGTH))
-        }
-      }
+      .map(kv => fdbSerializer.persistentReprFromKeyValue(kv))
       .map(recoveryCallback)
       .runWith(Sink.ignore)
       .map(_ => ())

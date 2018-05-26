@@ -30,12 +30,12 @@ class FoundationDbJournalPerfSpec extends JournalPerfSpec(
 
     db.run { tr =>
       tr.clear(journalConfig.tagsDir.range())
-      tr.clear(journalConfig.logsDir.range())
+      tr.clear(journalConfig.eventLogDir.range())
       tr.clear(journalConfig.seqNoDir.range())
       tr.clear(journalConfig.tagWatchDir.range())
       tr.clear(journalConfig.pluginDirectory.range())
       journalConfig.tagsDir.removeIfExists(db)
-      journalConfig.logsDir.removeIfExists(db)
+      journalConfig.eventLogDir.removeIfExists(db)
       journalConfig.seqNoDir.removeIfExists(db)
       journalConfig.tagWatchDir.removeIfExists(db)
       journalConfig.pluginDirectory.removeIfExists(db)
