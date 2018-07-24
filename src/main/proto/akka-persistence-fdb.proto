@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option java_package = "akka.persistence.foundationdb.serialization";
+
+message CompactTag {
+    string persistence_id = 1;
+    int64 sequence_nr = 2;
+}
+
+message RichTag {
+    bytes payload = 1;
+}
+
+message Tag {
+    CompactTag compact = 1;
+    RichTag rich = 2;
+}

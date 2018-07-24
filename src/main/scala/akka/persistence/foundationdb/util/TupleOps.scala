@@ -8,8 +8,4 @@ object TupleOps {
     Tuple.from(persistenceId, sequenceNr: java.lang.Long)
   }
 
-  def tuple2PersistentReprId(tuple: Tuple): (String, Long) = {
-    tuple.getString(0) -> tuple.getLong(1)
-  }
-
 }

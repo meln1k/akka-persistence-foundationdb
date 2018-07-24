@@ -12,6 +12,6 @@ import com.apple.foundationdb.tuple.Versionstamp
   * in the returned stream. This means that you can use the offset that is returned in `EventEnvelope`
   * as the `offset` parameter in a subsequent query.
   */
-final case class VersionstampBasedOffset(value: Versionstamp) extends Offset with Ordered[VersionstampBasedOffset] {
-  override def compare(that: VersionstampBasedOffset): Int = value.compareTo(that.value)
+final case class VersionstampOffset(value: Versionstamp) extends Offset with Ordered[VersionstampOffset] {
+  override def compare(that: VersionstampOffset): Int = value.compareTo(that.value)
 }

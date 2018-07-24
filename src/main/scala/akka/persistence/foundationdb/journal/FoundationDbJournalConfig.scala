@@ -1,12 +1,13 @@
 package akka.persistence.foundationdb.journal
 
+import akka.actor.ActorSystem
 import akka.persistence.foundationdb.FoundationDbPluginConfig
 import akka.persistence.foundationdb.journal.TagStoringPolicy._
 import com.typesafe.config.Config
 
 import scala.collection.JavaConverters._
 
-class FoundationDbJournalConfig(config: Config) extends FoundationDbPluginConfig(config) {
+class FoundationDbJournalConfig(system: ActorSystem, config: Config) extends FoundationDbPluginConfig(system, config) {
 
   val tagStoringPolicy: TagStoringPolicy = {
     config.getString("tag-storing-policy") match {
