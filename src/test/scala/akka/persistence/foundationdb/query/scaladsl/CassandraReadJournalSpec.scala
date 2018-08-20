@@ -15,7 +15,7 @@ import com.typesafe.config.ConfigFactory
 import org.scalatest.{Matchers, WordSpecLike}
 import akka.persistence.foundationdb.FoundationDbLifecycle
 import akka.persistence.foundationdb.query.scaladsl.FoundationDbReadJournal
-import akka.persistence.cassandra.query.TestActor
+import akka.persistence.foundationdb.query.TestActor
 import akka.persistence.foundationdb.query.FoundationDbReadJournalConfig
 import akka.persistence.journal.{Tagged, WriteEventAdapter}
 import akka.persistence.query.PersistenceQuery
@@ -28,15 +28,13 @@ import com.apple.foundationdb.tuple.Tuple
 
 import scala.collection.JavaConverters._
 
-
 object FoundationDbReadJournalSpec {
 
+  val config = ConfigFactory
+    .parseString( //todo fix the directory in the read journal
+      s"""
 
-  val config = ConfigFactory.parseString( //todo fix the directory in the read journal
-    s"""
-
-    foundationdb-query-journal.directory=ScalaFoundationDbReadJournalSpec
-    foundationdb-journal.directory=ScalaFoundationDbReadJournalSpec
+    foundationdb-journal.directory="ScalaFoundationDbReadJournalSpec"
 
     akka.loglevel = INFO
     akka.actor.serialize-messages=off
@@ -48,8 +46,8 @@ object FoundationDbReadJournalSpec {
       "java.lang.String" = test-tagger
     }
     cassandra-journal.log-queries = off
-    """
-  ).withFallback(FoundationDbLifecycle.config)
+    """)
+    .withFallback(FoundationDbLifecycle.config)
 }
 
 class TestTagger extends WriteEventAdapter {
@@ -63,42 +61,11 @@ class TestTagger extends WriteEventAdapter {
 }
 
 class FoundationDbReadJournalSpec
-  extends TestKit(ActorSystem("ScalaFoundationDbReadJournalSpec", FoundationDbReadJournalSpec.config))
-  with ImplicitSender
-  with WordSpecLike
-  with FoundationDbLifecycle
-  with Matchers {
-
-
-  val readJournalConfig = new FoundationDbReadJournalConfig(system, FoundationDbReadJournalSpec.config.getConfig("foundationdb-journal"))
-
-
-  db.run { tr =>
-    tr.clear(new FdbRange(Array(0x00.toByte), Array(0xFF.toByte)))
-    val directoryLayer = new DirectoryLayer()
-  }
-
-
-//  override protected def foundationDbCleanup() = { database: Database =>
-//    //todo proper cleanup
-//    database.run { tr =>
-//      tr.clear(new FdbRange(Tuple.from("").pack(), Tuple.from("xFF").pack()))
-//    }
-//  }
-
-//  override protected def externalCassandraCleanup(): Unit = {
-//    val cluster = Cluster.builder()
-//      .withClusterName("scaladslcassandrareadjournalspec")
-//      .addContactPoint("localhost")
-//      .withPort(9042)
-//      .build()
-//    try {
-//      cluster.connect().execute("drop keyspace scaladslcassandrareadjournalspec")
-//    } finally {
-//      cluster.close()
-//    }
-//  }
-
+    extends TestKit(ActorSystem("ScalaFoundationDbReadJournalSpec", FoundationDbReadJournalSpec.config))
+    with ImplicitSender
+    with WordSpecLike
+    with FoundationDbLifecycle
+    with Matchers {
 
   implicit val mat = ActorMaterializer()(system)
 
@@ -112,7 +79,9 @@ class FoundationDbReadJournalSpec
       expectMsg("a-1-done")
 
       val src = queries.eventsByPersistenceId("a", 0L, Long.MaxValue)
-      src.map(_.persistenceId).runWith(TestSink.probe[Any])
+      src
+        .map(_.persistenceId)
+        .runWith(TestSink.probe[Any])
         .request(10)
         .expectNext("a")
         .cancel()
@@ -124,7 +93,9 @@ class FoundationDbReadJournalSpec
       expectMsg("b-1-done")
 
       val src = queries.currentEventsByPersistenceId("b", 0L, Long.MaxValue)
-      src.map(_.persistenceId).runWith(TestSink.probe[Any])
+      src
+        .map(_.persistenceId)
+        .runWith(TestSink.probe[Any])
         .request(10)
         .expectNext("b")
         .expectComplete()
@@ -133,7 +104,9 @@ class FoundationDbReadJournalSpec
     // these tests rely on events written in previous tests
     "start eventsByTag query" in {
       val src = queries.eventsByTag("a", NoOffset)
-      src.map(_.persistenceId).runWith(TestSink.probe[Any])
+      src
+        .map(_.persistenceId)
+        .runWith(TestSink.probe[Any])
         .request(10)
         .expectNext("a")
         .expectNoMessage(100.millis)
@@ -142,7 +115,9 @@ class FoundationDbReadJournalSpec
 
     "start current eventsByTag query" in {
       val src = queries.currentEventsByTag("a", NoOffset)
-      src.map(_.persistenceId).runWith(TestSink.probe[Any])
+      src
+        .map(_.persistenceId)
+        .runWith(TestSink.probe[Any])
         .request(10)
         .expectNext("a")
         .expectComplete()

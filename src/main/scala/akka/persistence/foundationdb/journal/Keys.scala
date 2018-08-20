@@ -9,14 +9,13 @@ import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
 private[foundationdb] sealed trait Key {
   def subspace: Subspace
   def tuple: Tuple
-  def value: ByteString = ByteString.fromArrayUnsafe(subspace.pack(tuple))
-
+  def bytes: Array[Byte] = subspace.pack(tuple)
 }
 
 trait VersionstampedKey extends Key {
   def versionstamp: Versionstamp
 
-  override def value: ByteString = ByteString.fromArrayUnsafe(subspace.packWithVersionstamp(tuple))
+  override def bytes: Array[Byte] = subspace.packWithVersionstamp(tuple)
 }
 
 private[foundationdb] final case class MessageKey(subspace: Subspace, tuple: Tuple) extends Key {

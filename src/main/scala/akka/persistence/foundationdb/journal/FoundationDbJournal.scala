@@ -1,8 +1,8 @@
 package akka.persistence.foundationdb.journal
 
 import java.nio.{ByteBuffer, ByteOrder}
-import java.util.concurrent.CompletableFuture
 
+import akka.Done
 import akka.persistence.foundationdb.util.RangeRead
 import akka.persistence.{AtomicWrite, PersistentRepr}
 import akka.persistence.journal.{AsyncWriteJournal, Tagged}
@@ -11,9 +11,8 @@ import akka.stream.scaladsl.Sink
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.util.ByteString
 import com.apple.foundationdb.{MutationType, Transaction}
-import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
+import com.apple.foundationdb.tuple.Versionstamp
 import com.typesafe.config.Config
-import akka.persistence.foundationdb.util.TupleOps._
 
 import scala.collection.immutable
 import scala.concurrent.{Await, Future}
@@ -32,7 +31,6 @@ import akka.persistence.foundationdb.layers._
 
 class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
-
   private[akka] val config = new FoundationDbJournalConfig(context.system, cfg)
 
   private[akka] val serialization = SerializationExtension(context.system)
@@ -40,10 +38,10 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
   import config._
 
-
   val fdbSerializer = new FdbSerializer(serialization)
 
-  implicit val dispatcher = context.system.dispatchers.lookup("foundationdb-plugin-default-dispatcher")
+  implicit val dispatcher =
+    context.system.dispatchers.lookup("foundationdb-plugin-default-dispatcher")
 
   implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
@@ -82,9 +80,10 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   def insertTag(tag: String, tagType: TagType, messageNr: Int)(implicit tr: Transaction): Unit = {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_VALUE,
-      keySerializer.tagWatch(tag).value.toArray,
+      keySerializer.tagWatch(tag).bytes,
       ByteString.newBuilder
-        .putBytes(Versionstamp.incomplete(messageNr).getBytes)
+        .putBytes(Versionstamp.incomplete(messageNr).getBytes) //versionstamp
+        .putInt(0)(ByteOrder.LITTLE_ENDIAN) //position where it's located
         .result()
         .toArray
     )
@@ -114,7 +113,8 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 //  }
 
   def insertCompactMessage(persistentRepr: PersistentRepr)(implicit tx: Transaction): Unit = {
-    val serializedMessage = fdbSerializer.serializePersistentRepr(persistentRepr)
+    val serializedMessage =
+      fdbSerializer.serializePersistentRepr(persistentRepr)
     writeSerializedMessage(serializedMessage)
   }
 
@@ -124,10 +124,7 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     ???
   }
 
-
-
-
-  // writing the serialized message using (directory, persistenceId, seqNr, chunkNr) -> binary chunk
+  // writing the serialized message using (directoryØ, persistenceId, seqNr, chunkNr) -> binary chunk
   def writeSerializedMessage(serializedMessage: SerializedMessage)(implicit tx: Transaction): Unit = {
     val key = keySerializer.message(serializedMessage.persistenceId, serializedMessage.sequenceNr)
     BlobLayer.writeChunked(key, serializedMessage.payload)
@@ -154,11 +151,11 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
       case TagStoringPolicy.AlwaysCompact =>
         (tr, persistentRepr, tags, messageNr) =>
-        tags.foreach { tag =>
-          val tagType = CompactTag(persistentRepr.persistenceId, persistentRepr.sequenceNr)
-          insertTag(tag, tagType,  messageNr)(tr)
-        }
-        insertCompactMessage(persistentRepr)(tr)
+          tags.foreach { tag =>
+            val tagType = CompactTag(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+            insertTag(tag, tagType, messageNr)(tr)
+          }
+          insertCompactMessage(persistentRepr)(tr)
 
 //      case TagStoringPolicy.DefaultRich(compactTags) =>
 //        (tr, persistentRepr, tags, messageNr) =>
@@ -179,44 +176,96 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 //        insertRichMessage(tr, persistentRepr, messageNr)
     }
 
-
-  def storeMaxSequenceNr(tr: Transaction, persistentId: String, sequenceNr: Long) = {
+  def storeMaxSequenceNr(persistentId: String, sequenceNr: Long)(implicit tr: Transaction) = {
     tr.mutate(
-      MutationType.BYTE_MAX,
-      keySerializer.maxSequenceNr(persistentId).value.toArray,
-      ByteString.newBuilder.putLong(sequenceNr)(ByteOrder.LITTLE_ENDIAN).result().toArray
+      MutationType.MAX,
+      keySerializer.maxSequenceNr(persistentId).bytes,
+      ByteString.newBuilder
+        .putLong(sequenceNr)(ByteOrder.LITTLE_ENDIAN)
+        .result()
+        .toArray
     )
 
+  }
+
+  def isWriteSafe(persistentId: String, sequenceNr: Long)(implicit tx: Transaction): Future[Boolean] = async {
+    val key = keySerializer.message(persistentId, sequenceNr)
+    val firstChunk = key.subspace.pack(key.tuple.add(0))
+    val message = await(tx.get(firstChunk).toScala)
+    message match {
+      case null => true
+      case _    => false
+    }
   }
 
   override def postStop(): Unit = {
     session.close()
   }
 
-  override def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] = {
+  private def asyncWriteSafe(payload: immutable.Seq[PersistentRepr])(implicit tr: Transaction): Future[Done] = {
 
-      val futures = messages.map { case AtomicWrite(payload) =>
-        session.runAsync { tr =>
-          payload.zipWithIndex.foreach { case (persistentRepr, messageNr) =>
+    val futures = payload.zipWithIndex.map {
+      case (persistentRepr, messageNr) =>
+        val canCommit = isWriteSafe(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+        canCommit.map {
+          case true =>
             val (prWithoutTags, tags) = persistentRepr.payload match {
               case Tagged(payload, tags) =>
                 (persistentRepr.withPayload(payload), tags)
               case _ =>
                 (persistentRepr, Set.empty[String])
             }
-            storePersistentRepr(tr, prWithoutTags, tags, messageNr)
-            storeMaxSequenceNr(tr, persistentRepr.persistenceId, persistentRepr.sequenceNr)
-          }
-          Future.successful(())
+
+            storePersistentRepr(tr, prWithoutTags, tags, messageNr.toInt)
+            storeMaxSequenceNr(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+          case false =>
+            tr.cancel()
+            throw new IllegalStateException(
+              "Multiple writers with the same persistenceId were detected. " +
+                s"Rejecting conflicting write for the message with persistenceId ${persistentRepr.persistenceId} " +
+                s"and sequenceNr ${persistentRepr.sequenceNr} made by ${persistentRepr.writerUuid}")
         }
-          .map(Success(_))
+    }
+
+    Future.sequence(futures).map(_ => Done)
+
+  }
+
+  private def asyncWriteFast(payload: immutable.Seq[PersistentRepr])(implicit tr: Transaction): Future[Done] = {
+    payload.zipWithIndex.foreach {
+      case (persistentRepr, messageNr) =>
+        val (prWithoutTags, tags) = persistentRepr.payload match {
+          case Tagged(payload, tags) =>
+            (persistentRepr.withPayload(payload), tags)
+          case _ =>
+            (persistentRepr, Set.empty[String])
+        }
+        storePersistentRepr(tr, prWithoutTags, tags, messageNr)
+        storeMaxSequenceNr(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+    }
+    Future.successful(Done)
+  }
+
+  override def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] = {
+
+    val futures = messages.map {
+      case AtomicWrite(payload) =>
+        session
+          .runAsync { implicit tr =>
+            if (config.checkJournalCorruption) {
+              asyncWriteSafe(payload)
+            } else {
+              asyncWriteFast(payload)
+            }
+          }
+          .map(_ => Success(()))
           .recover {
             case NonFatal(ex) =>
               Failure(ex)
           }
-      }
+    }
 
-      Future.sequence(futures)
+    Future.sequence(futures)
 
   }
 
@@ -225,11 +274,11 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
       case TagStoringPolicy.AlwaysCompact =>
         val normalizedSeqNo = toSequenceNr match {
           case Long.MaxValue => toSequenceNr
-          case _ => toSequenceNr + 1
+          case _             => toSequenceNr + 1
         }
         session.runAsync { tr =>
-          val from = directories.messages.pack(persistentReprId2Tuple(persistenceId, 0L))
-          val to   = directories.messages.pack(persistentReprId2Tuple(persistenceId, normalizedSeqNo))
+          val from = keySerializer.message(persistenceId, 0L).bytes
+          val to = keySerializer.message(persistenceId, normalizedSeqNo).bytes
           tr.clear(from, to)
           Future.successful(())
         }
@@ -239,15 +288,20 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     }
   }
 
-  override def asyncReplayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(recoveryCallback: PersistentRepr => Unit): Future[Unit] = {
-    val from = directories.messages.pack(persistentReprId2Tuple(persistenceId, fromSequenceNr))
-    val to = directories.messages.pack(persistentReprId2Tuple(persistenceId, toSequenceNr + 1)) //range reads exclude the last key
+  override def asyncReplayMessages(persistenceId: String, fromSequenceNr: Long, toSequenceNr: Long, max: Long)(
+      recoveryCallback: PersistentRepr => Unit): Future[Unit] = {
+    val from = keySerializer.message(persistenceId, fromSequenceNr).bytes
+    val normalizedToSeqNo = toSequenceNr match {
+      case Long.MaxValue => toSequenceNr
+      case _             => toSequenceNr + 1
+    }
+    val to = keySerializer.message(persistenceId, normalizedToSeqNo).bytes
 
     //TODO: correctly handle values which can't fit into Int
     val limit = max match {
-      case Long.MaxValue => None
+      case Long.MaxValue                => None
       case long if long >= Int.MaxValue => Some(Int.MaxValue)
-      case int => Some(int.toInt)
+      case int                          => Some(int.toInt)
     }
 
     session.underlying().flatMap { implicit tx =>
@@ -263,58 +317,23 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   }
 
   override def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = {
-    session.runAsync {tr =>
-        val key = directories.maxSeqNr.pack(Tuple.from(persistenceId))
+    session
+      .runAsync { tr =>
+        val key = keySerializer.maxSequenceNr(persistenceId).bytes
         tr.get(key).toScala
       }
       .map {
         case null =>
           0L
         case bytes: Array[Byte] =>
-          ByteBuffer
-            .wrap(bytes)
-            .order(ByteOrder.LITTLE_ENDIAN)
-            .getLong
+          readLittleEndianLong(bytes)
       }
   }
+
+  private def readLittleEndianLong(bytes: Array[Byte]): Long = {
+    ByteBuffer
+      .wrap(bytes)
+      .order(ByteOrder.LITTLE_ENDIAN)
+      .getLong
+  }
 }
-
-
-//
-//
-//sealed trait Key {
-//  def tuple: Tuple
-//}
-//trait MessagesKey extends Key {
-//  def persistenceId: String = tuple.getString(1)
-//  def sequnceNr: Long = tuple.getLong(2)
-//}
-//
-//sealed trait TagType
-//trait MessageTagType extends MessagesKey {
-//  def isCompact: Boolean
-//}
-//trait MessageVersionstamp extends MessagesKey
-//trait MessageDataChunk extends MessagesKey
-//
-//object Keys {
-//  object Messages {
-//    val TAG_TYPE = 0x00
-//    val VERSIONSTAMP = 0x01
-//    val CHUNK = 0xDD
-//  }
-//
-//
-//  def apply(tuple: Tuple): Key = {
-//    tuple(3) match {
-//      case TAG_TYPE => new MessageTagType {
-//        override def tuple: Tuple = tuple
-//        override def tagType: TagType = tuple.get(4)
-//      }
-//      case VERSIONSTAMP => new MessageVersionstamp {
-//        override def tuple: Tuple = tuple
-//      }
-//      case
-//    }
-//  }
-//}

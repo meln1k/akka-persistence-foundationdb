@@ -1,22 +1,30 @@
 package akka.persistence.foundationdb.util
 
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicInteger
 
 import akka.{Done, NotUsed}
 import akka.stream.scaladsl.Source
 import com.apple.foundationdb.async.{AsyncIterable, AsyncIterator}
 import com.apple.foundationdb.tuple.Tuple
-import com.apple.foundationdb.{Database, FDBException, KeySelector, KeyValue, ReadTransaction, ReadTransactionContext, StreamingMode, Transaction, TransactionContext, Range => FdbRange}
+import com.apple.foundationdb.{
+  Database,
+  FDBException,
+  KeySelector,
+  KeyValue,
+  ReadTransaction,
+  ReadTransactionContext,
+  StreamingMode,
+  Range => FdbRange
+}
 
 import scala.compat.java8.FutureConverters._
-import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
 object RangeRead {
 
   //todo make it lazy
-  def longRunningRangeSource(range: FdbRange, limit: Option[Int])(implicit tcx: Database, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+  def longRunningRangeSource(range: FdbRange, limit: Option[Int])(implicit tcx: Database,
+                                                                  ec: ExecutionContext): Source[KeyValue, NotUsed] = {
     longRunningRangeSource(range.begin, range.end, limit)
   }
 
@@ -29,13 +37,16 @@ object RangeRead {
     * @param ec
     * @return
     */
-  def longRunningRangeSource(from: Array[Byte], to: Array[Byte], limit: Option[Int])(implicit db: Database, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+  def longRunningRangeSource(from: Array[Byte], to: Array[Byte], limit: Option[Int])(
+      implicit db: Database,
+      ec: ExecutionContext): Source[KeyValue, NotUsed] = {
 
     @volatile var currentPosition: Array[Byte] = from
 
     val validatedLimit = limit match {
       case None => ReadTransaction.ROW_LIMIT_UNLIMITED
-      case Some(n) if n < 0 => throw new IllegalArgumentException("row limit can't be negative")
+      case Some(n) if n < 0 =>
+        throw new IllegalArgumentException("row limit can't be negative")
       case Some(n) => n
     }
 
@@ -44,7 +55,7 @@ object RangeRead {
     def getLimit(): Int = {
       limit match {
         case None => ReadTransaction.ROW_LIMIT_UNLIMITED
-        case _ => elementsLeft.get()
+        case _    => elementsLeft.get()
       }
     }
 
@@ -54,16 +65,15 @@ object RangeRead {
         end = KeySelector.firstGreaterOrEqual(to),
         limit = getLimit(),
         mode = StreamingMode.WANT_ALL
-      )
-      .map { kv =>
-        currentPosition = Tuple.fromBytes(kv.getKey).range().begin
-        elementsLeft.decrementAndGet()
-        kv
-      }
-      .recoverWithRetries(-1, {
-        case ex: FDBException if ex.getCode == 1007 =>
-          recursiveRangeSource
-      })
+      ).map { kv =>
+          currentPosition = Tuple.fromBytes(kv.getKey).range().begin
+          elementsLeft.decrementAndGet()
+          kv
+        }
+        .recoverWithRetries(-1, {
+          case ex: FDBException if ex.getCode == 1007 =>
+            recursiveRangeSource
+        })
     }
 
     limit match {
@@ -74,11 +84,9 @@ object RangeRead {
     }
   }
 
-  def rangeSource(range: FdbRange,
-                  limit: Int,
-                  reverse: Boolean,
-                  mode: StreamingMode)
-                 (implicit tcx: ReadTransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+  def rangeSource(range: FdbRange, limit: Int, reverse: Boolean, mode: StreamingMode)(
+      implicit tcx: ReadTransactionContext,
+      ec: ExecutionContext): Source[KeyValue, NotUsed] = {
     asyncIterableToSource(_.getRange(range, limit, reverse, mode))
   }
 
@@ -101,45 +109,14 @@ object RangeRead {
                   end: KeySelector,
                   limit: Int = ReadTransaction.ROW_LIMIT_UNLIMITED,
                   reverse: Boolean = false,
-                  mode: StreamingMode = StreamingMode.ITERATOR)
-                 (implicit tcx: ReadTransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+                  mode: StreamingMode = StreamingMode.ITERATOR)(implicit tcx: ReadTransactionContext,
+                                                                ec: ExecutionContext): Source[KeyValue, NotUsed] = {
     asyncIterableToSource(_.getRange(begin, end, limit, reverse, mode))
-
-//    Source.unfoldResourceAsync[KeyValue, (AsyncIterator[KeyValue], Promise[NotUsed])](
-//      () => {
-//        val transactionPromise = Promise[ReadTransaction]()
-//        val resultPromise = Promise[NotUsed]()
-//        tcx.readAsync { tr =>
-//          transactionPromise.trySuccess(tr)
-//          resultPromise.future.toJava.toCompletableFuture
-//        }
-//        transactionPromise.future.map {
-//          tr =>
-//            val res = tr.getRange(begin, end, limit, reverse, mode)
-//            res.iterator() -> resultPromise
-//        }
-//      },
-//      {
-//        case (iterator, resultPromise) => iterator.onHasNext().toScala.map {
-//          case java.lang.Boolean.TRUE =>
-//            Some(iterator.next())
-//          case _ =>
-//            resultPromise.trySuccess(NotUsed)
-//            None
-//        }
-//      },
-//      {
-//        case (iterator, resultPromise) =>
-//          Future.successful {
-//            iterator.cancel()
-//            resultPromise.trySuccess(NotUsed)
-//            Done
-//          }
-//      }
-//    )
   }
 
-  private def asyncIterableToSource(getRange: ReadTransaction => AsyncIterable[KeyValue])(implicit tcx: ReadTransactionContext, ec: ExecutionContext): Source[KeyValue, NotUsed] = {
+  private def asyncIterableToSource(getRange: ReadTransaction => AsyncIterable[KeyValue])(
+      implicit tcx: ReadTransactionContext,
+      ec: ExecutionContext): Source[KeyValue, NotUsed] = {
     Source.unfoldResourceAsync[KeyValue, (AsyncIterator[KeyValue], Promise[NotUsed])](
       () => {
         val transactionPromise = Promise[ReadTransaction]()
@@ -148,22 +125,20 @@ object RangeRead {
           transactionPromise.trySuccess(tr)
           resultPromise.future.toJava.toCompletableFuture
         }
-        transactionPromise.future.map {
-          tr =>
-            val res = getRange(tr)
-            res.iterator() -> resultPromise
+        transactionPromise.future.map { tr =>
+          val res = getRange(tr)
+          res.iterator() -> resultPromise
         }
-      },
-      {
-        case (iterator, resultPromise) => iterator.onHasNext().toScala.map {
-          case java.lang.Boolean.TRUE =>
-            Some(iterator.next())
-          case _ =>
-            resultPromise.trySuccess(NotUsed)
-            None
-        }
-      },
-      {
+      }, {
+        case (iterator, resultPromise) =>
+          iterator.onHasNext().toScala.map {
+            case java.lang.Boolean.TRUE =>
+              Some(iterator.next())
+            case _ =>
+              resultPromise.trySuccess(NotUsed)
+              None
+          }
+      }, {
         case (iterator, resultPromise) =>
           Future.successful {
             iterator.cancel()

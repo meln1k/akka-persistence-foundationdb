@@ -3,7 +3,7 @@
  * Copyright (C) 2018 Nikita Melkozerov <http://www.lightbend.com>
  */
 
-package akka.persistence.cassandra.query
+package akka.persistence.foundationdb.query
 
 import scala.collection.immutable
 import akka.actor.Props
@@ -47,11 +47,12 @@ class TestActor(override val persistenceId: String) extends PersistentActor {
       val size = events.size
       val handler = {
         var count = 0
-        (evt: String) => {
-          count += 1
-          if (count == size)
-            sender() ! "PersistAll-done"
-        }
+        (evt: String) =>
+          {
+            count += 1
+            if (count == size)
+              sender() ! "PersistAll-done"
+          }
       }
       persistAll(events)(handler)
 

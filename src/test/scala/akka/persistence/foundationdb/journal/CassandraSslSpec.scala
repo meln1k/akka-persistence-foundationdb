@@ -1,5 +1,6 @@
 ///*
 // * Copyright (C) 2016-2017 Lightbend Inc. <http://www.lightbend.com>
+// * Copyright (C) 2018 Nikita Melkozerov. <n.melkozerov at gmail dot com>
 // */
 //
 //package akka.persistence.cassandra.journal

@@ -10,6 +10,7 @@ object Dependencies {
     "com.typesafe.akka"      %% "akka-cluster-tools"                  % AkkaVersion,
     "com.typesafe.akka"      %% "akka-persistence-query"              % AkkaVersion,
     "com.google.protobuf"     % "protobuf-java"                       % "3.6.0",
+    "org.foundationdb"        % "fdb-java"                            % "5.2.5",
 
 
     "com.typesafe.akka"      %% "akka-persistence-tck"                % AkkaVersion     % "test",

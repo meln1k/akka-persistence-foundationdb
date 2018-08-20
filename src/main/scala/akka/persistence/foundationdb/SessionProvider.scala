@@ -2,7 +2,7 @@ package akka.persistence.foundationdb
 
 import akka.actor.ActorSystem
 import com.apple.foundationdb.{Cluster, Database, FDB}
-import com.typesafe.config.Config
+import com.typesafe.config.{Config, ConfigFactory}
 
 import scala.concurrent.{Future, blocking}
 
@@ -12,7 +12,10 @@ trait SessionProvider {
 
 object SessionProvider {
 
-  private lazy val fdb: FDB = blocking(FDB.selectAPIVersion(510))
+  private lazy val fdbVersion =
+    ConfigFactory.load().getInt("foundationdb-journal.api-version")
+
+  private lazy val fdb: FDB = blocking(FDB.selectAPIVersion(fdbVersion))
 
   private lazy val cluster: Cluster = blocking {
     val cluster = fdb.createCluster()
@@ -24,10 +27,14 @@ object SessionProvider {
   }
 
   def apply(system: ActorSystem, config: Config): SessionProvider = {
-    val blockingDispatcher = system.dispatchers.lookup("foundationdb-plugin-blocking-io-dispatcher")
+    val blockingDispatcher =
+      system.dispatchers.lookup("foundationdb-plugin-blocking-io-dispatcher")
     new SessionProvider {
       override def connect(): Future[Database] = {
-        Future(cluster.openDatabase())(blockingDispatcher)
+        Future {
+          val db = cluster.openDatabase()
+          db
+        }(blockingDispatcher)
       }
     }
   }

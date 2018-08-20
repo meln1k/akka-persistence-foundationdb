@@ -13,5 +13,6 @@ import com.apple.foundationdb.tuple.Versionstamp
   * as the `offset` parameter in a subsequent query.
   */
 final case class VersionstampOffset(value: Versionstamp) extends Offset with Ordered[VersionstampOffset] {
-  override def compare(that: VersionstampOffset): Int = value.compareTo(that.value)
+  override def compare(that: VersionstampOffset): Int =
+    value.compareTo(that.value)
 }

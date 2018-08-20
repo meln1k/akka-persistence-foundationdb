@@ -12,24 +12,27 @@ import akka.actor.{ActorSystem, Props}
 import akka.event.{Logging, LoggingAdapter}
 import akka.persistence.PersistentActor
 import akka.testkit.{TestKitBase, TestProbe}
+import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.{Cluster, Database, FDB}
 import com.typesafe.config.ConfigFactory
 import org.scalatest._
+import scala.collection.JavaConverters._
 
 import scala.concurrent.duration._
 
 object FoundationDbLifecycle {
 
   val config = { //todo add snapshot store
-    ConfigFactory.parseString(
-      s"""
+    ConfigFactory
+      .parseString(
+        s"""
     akka.persistence.journal.plugin = "foundationdb-journal"
     akka.persistence.snapshot-store.plugin = "foundationdb-snapshot-store"
-    foundationdb-journal.circuit-breaker.call-timeout = 30s
     akka.test.single-expect-default = 20s
     akka.actor.serialize-messages=on
     """
-    ).withFallback(ConfigFactory.load())
+      )
+      .withFallback(ConfigFactory.load())
   }
 
   def awaitPersistenceInit(system: ActorSystem, journalPluginId: String = "", snapshotPluginId: String = ""): Unit = {
@@ -39,16 +42,20 @@ object FoundationDbLifecycle {
     probe.within(45.seconds) {
       probe.awaitAssert {
         n += 1
-        system.actorOf(Props(classOf[AwaitPersistenceInit], journalPluginId, snapshotPluginId), "persistenceInit" + n).tell("hello", probe.ref)
+        system
+          .actorOf(Props(classOf[AwaitPersistenceInit], journalPluginId, snapshotPluginId), "persistenceInit" + n)
+          .tell("hello", probe.ref)
         probe.expectMsg(5.seconds, "hello")
-        system.log.debug("awaitPersistenceInit took {} ms {}", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0), system.name)
+        system.log.debug("awaitPersistenceInit took {} ms {}",
+                         TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0),
+                         system.name)
       }
     }
   }
 
   class AwaitPersistenceInit(
-    override val journalPluginId:  String,
-    override val snapshotPluginId: String
+      override val journalPluginId: String,
+      override val snapshotPluginId: String
   ) extends PersistentActor {
     def persistenceId: String = "persistenceInit"
 
@@ -71,18 +78,15 @@ trait FoundationDbLifecycle extends BeforeAndAfterAll {
 
   lazy val db = FdbConnection.cluster.openDatabase()
 
-
   override protected def beforeAll(): Unit = {
+    foundationDbCleanup(db)
     awaitPersistenceInit()
     super.beforeAll()
   }
 
-
   def awaitPersistenceInit(): Unit = {
     FoundationDbLifecycle.awaitPersistenceInit(system)
   }
-
-
 
   override protected def afterAll(): Unit = {
     foundationDbCleanup(db)
@@ -91,11 +95,22 @@ trait FoundationDbLifecycle extends BeforeAndAfterAll {
     super.afterAll()
   }
 
-  protected def foundationDbCleanup: Database => Unit = {db => }
+  private def foundationDbCleanup(db: Database): Unit = {
+    val directoryLayer = new DirectoryLayer()
+    db.run { tx =>
+      directoryLayer
+        .removeIfExists(tx, List(system.settings.config.getString("foundationdb-journal.directory")).asJava)
+        .get()
+    }
+  }
 }
 
 object FdbConnection {
-  private lazy val fdb: FDB = FDB.selectAPIVersion(510)
+
+  private val conf = ConfigFactory.load()
+
+  private lazy val fdb: FDB =
+    FDB.selectAPIVersion(conf.getInt("foundationdb-journal.api-version"))
 
   lazy val cluster: Cluster = {
     val c = fdb.createCluster()

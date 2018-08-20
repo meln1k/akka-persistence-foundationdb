@@ -6,7 +6,6 @@ import scala.collection.JavaConverters._
 
 sealed trait TagStoringPolicy
 
-
 object TagStoringPolicy {
 
   /**
@@ -42,7 +41,6 @@ object TagStoringPolicy {
     * [[CurrentEventsByTagQuery#currentEventsByTag]] will be slower compared to the rich representation.
     */
   case object AlwaysCompact extends TagStoringPolicy
-
 
   val EVENT_TAG_RICH = 0L
   val EVENT_TAG_COMPACT = 1L

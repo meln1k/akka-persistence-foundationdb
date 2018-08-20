@@ -1,7 +1,5 @@
 package akka.persistence.foundationdb.layers
 
-
-
 import akka.NotUsed
 import akka.persistence.foundationdb.journal.{VersionstampedKey, Key}
 import akka.stream.scaladsl.Flow
@@ -17,18 +15,21 @@ object BlobLayer {
 
   def writeChunked(key: Key, payload: Array[Byte])(implicit tx: Transaction): Unit = {
     val tuple = key.tuple
-    payload.grouped(chunkSize).zipWithIndex.foreach { case (chunk, index) =>
-      tx.set(key.subspace.pack(tuple.add(index)), chunk)
+    payload.grouped(chunkSize).zipWithIndex.foreach {
+      case (chunk, index) =>
+        tx.set(key.subspace.pack(tuple.add(index)), chunk)
     }
   }
-  def writeChunkedWithVersionstamp(key: Key with VersionstampedKey, payload: Array[Byte])(implicit tx: Transaction): Unit = {
+  def writeChunkedWithVersionstamp(key: Key with VersionstampedKey, payload: Array[Byte])(
+      implicit tx: Transaction): Unit = {
     val tuple = key.tuple
-    payload.grouped(chunkSize).zipWithIndex.foreach { case (chunk, index) =>
-      tx.mutate(
-        MutationType.SET_VERSIONSTAMPED_KEY,
-        key.subspace.packWithVersionstamp(tuple.add(index)),
-        chunk
-      )
+    payload.grouped(chunkSize).zipWithIndex.foreach {
+      case (chunk, index) =>
+        tx.mutate(
+          MutationType.SET_VERSIONSTAMPED_KEY,
+          key.subspace.packWithVersionstamp(tuple.add(index)),
+          chunk
+        )
     }
   }
 }
@@ -39,50 +40,54 @@ class ChunkedValueAssembler(maxSingleElementSize: Int) extends GraphStage[FlowSh
   val in = Inlet[KeyValue]("ChunkedByteStringReader.in")
   val out = Outlet[AssembledPayload]("ChunkedByteStringReader.out")
 
-  override def shape: FlowShape[KeyValue, AssembledPayload] = FlowShape.of(in, out)
+  override def shape: FlowShape[KeyValue, AssembledPayload] =
+    FlowShape.of(in, out)
 
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new GraphStageLogic(shape) {
-    private var buffer = ByteString.empty
-    private var currentKey = ByteString.empty
-    setHandler(in, new InHandler {
-      override def onPush(): Unit = {
-        val elem = grab(in)
-        val key = elem.getKey
-        val tuple = Tuple.fromBytes(key)
-        val chunkNr = tuple.getLong(tuple.size() - 1) // last element of the tuple
-        if (chunkNr == 0 && buffer.nonEmpty) { // new message started
-          push(out, AssembledPayload(currentKey, buffer))
-          buffer = ByteString.fromArrayUnsafe(elem.getValue)
-          currentKey = ByteString.fromArrayUnsafe(tuple.popBack().pack())
-        } else {
-          buffer ++= ByteString.fromArrayUnsafe(elem.getValue)
-          if (currentKey.isEmpty) {
-            currentKey = ByteString.fromArrayUnsafe(tuple.popBack().pack())
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
+    new GraphStageLogic(shape) {
+      private var buffer = ByteString.empty
+      private var currentKey = ByteString.empty
+      setHandler(
+        in,
+        new InHandler {
+          override def onPush(): Unit = {
+            val elem = grab(in)
+            val key = elem.getKey
+            val tuple = Tuple.fromBytes(key)
+            val chunkNr = tuple.getLong(tuple.size() - 1) // last element of the tuple
+            if (chunkNr == 0 && buffer.nonEmpty) { // new message started
+              push(out, AssembledPayload(currentKey, buffer))
+              buffer = ByteString.fromArrayUnsafe(elem.getValue)
+              currentKey = ByteString.fromArrayUnsafe(tuple.popBack().pack())
+            } else {
+              buffer ++= ByteString.fromArrayUnsafe(elem.getValue)
+              if (currentKey.isEmpty) {
+                currentKey = ByteString.fromArrayUnsafe(tuple.popBack().pack())
+              }
+              if (buffer.size > maxSingleElementSize) {
+                failStage(new IllegalStateException("Buffer overflow"))
+              } else {
+                pull(in)
+              }
+            }
           }
-          if (buffer.size > maxSingleElementSize) {
-            failStage(new IllegalStateException("Buffer overflow"))
-          } else {
-            pull(in)
+
+          override def onUpstreamFinish(): Unit = {
+            if (buffer.nonEmpty) {
+              emit(out, AssembledPayload(currentKey, buffer))
+            }
+            completeStage()
           }
         }
-      }
+      )
 
-      override def onUpstreamFinish(): Unit = {
-        if (buffer.nonEmpty) {
-          emit(out, AssembledPayload(currentKey, buffer))
+      setHandler(out, new OutHandler {
+        override def onPull(): Unit = {
+          pull(in)
         }
-        completeStage()
-      }
-    })
-
-    setHandler(out, new OutHandler {
-      override def onPull(): Unit = {
-        pull(in)
-      }
-    })
-  }
+      })
+    }
 }
-
 
 object ChunkedValueAssembler {
   // 10 megabytes is the current FDB transaction limit

@@ -8,24 +8,25 @@ package akka.persistence.foundationdb.journal
 import java.util.UUID
 
 import scala.concurrent.duration._
-
 import akka.actor._
 import akka.persistence._
 import akka.persistence.foundationdb.FoundationDbLifecycle
 import akka.testkit._
-
+import com.apple.foundationdb.Database
 import com.typesafe.config.ConfigFactory
-
 import org.scalatest._
+import com.apple.foundationdb.{Range => FdbRange}
 
 object FoundationDbIntegrationSpec {
-  val config = ConfigFactory.parseString(
-    s"""
+  val config = ConfigFactory
+    .parseString(
+      s"""
       |akka.persistence.publish-confirmations = on
       |akka.persistence.publish-plugin-commands = on
       |foundationdb-journal.directory = "FoundationDbIntegrationSpec"
     """.stripMargin
-  ).withFallback(FoundationDbLifecycle.config)
+    )
+    .withFallback(FoundationDbLifecycle.config)
 
   case class DeleteTo(snr: Long)
 
@@ -95,7 +96,8 @@ object FoundationDbIntegrationSpec {
     }
   }
 
-  class ProcessorCNoRecover(override val persistenceId: String, probe: ActorRef, recoverConfig: Recovery) extends ProcessorC(persistenceId, probe) {
+  class ProcessorCNoRecover(override val persistenceId: String, probe: ActorRef, recoverConfig: Recovery)
+      extends ProcessorC(persistenceId, probe) {
     override def recovery = recoverConfig
     override def preStart() = ()
   }
@@ -104,12 +106,16 @@ object FoundationDbIntegrationSpec {
 
 import FoundationDbIntegrationSpec._
 
-class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbIntegrationSpec", config)) with ImplicitSender with WordSpecLike with Matchers with FoundationDbLifecycle {
-
-//  override def systemName: String = "CassandraIntegrationSpec"
+class FoundationDbIntegrationSpec
+    extends TestKit(ActorSystem("FoundationDbIntegrationSpec", config))
+    with ImplicitSender
+    with WordSpecLike
+    with Matchers
+    with FoundationDbLifecycle {
 
   def subscribeToRangeDeletion(probe: TestProbe): Unit =
-    system.eventStream.subscribe(probe.ref, classOf[JournalProtocol.DeleteMessagesTo])
+    system.eventStream
+      .subscribe(probe.ref, classOf[JournalProtocol.DeleteMessagesTo])
 
   def awaitRangeDeletion(probe: TestProbe): Unit =
     probe.expectMsgType[JournalProtocol.DeleteMessagesTo]
@@ -118,7 +124,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
     val deleteProbe = TestProbe()
     subscribeToRangeDeletion(deleteProbe)
 
-    val processor1 = system.actorOf(Props(classOf[ProcessorA], persistenceId, self))
+    val processor1 =
+      system.actorOf(Props(classOf[ProcessorA], persistenceId, self))
     1L to 16L foreach { i =>
       processor1 ! s"a-${i}"
       expectMsgAllOf(s"a-${i}", i, false)
@@ -144,13 +151,15 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
   "A Cassandra journal" should {
     "write and replay messages" in {
       val persistenceId = UUID.randomUUID().toString
-      val processor1 = system.actorOf(Props(classOf[ProcessorA], persistenceId, self), "p1")
+      val processor1 =
+        system.actorOf(Props(classOf[ProcessorA], persistenceId, self), "p1")
       1L to 16L foreach { i =>
         processor1 ! s"a-${i}"
         expectMsgAllOf(s"a-${i}", i, false)
       }
 
-      val processor2 = system.actorOf(Props(classOf[ProcessorA], persistenceId, self), "p2")
+      val processor2 =
+        system.actorOf(Props(classOf[ProcessorA], persistenceId, self), "p2")
       1L to 16L foreach { i =>
         expectMsgAllOf(s"a-${i}", i, true)
       }
@@ -165,7 +174,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
     "write and replay with persistAll greater than partition size skipping whole partition" in {
       val persistenceId = UUID.randomUUID().toString
       val probe = TestProbe()
-      val processorAtomic = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
+      val processorAtomic =
+        system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
 
       processorAtomic ! List("a-1", "a-2", "a-3", "a-4", "a-5", "a-6")
       1L to 6L foreach { i =>
@@ -181,7 +191,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
     "write and replay with persistAll greater than partition size skipping part of a partition" in {
       val persistenceId = UUID.randomUUID().toString
       val probe = TestProbe()
-      val processorAtomic = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
+      val processorAtomic =
+        system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
 
       processorAtomic ! List("a-1", "a-2", "a-3")
       1L to 3L foreach { i =>
@@ -201,14 +212,16 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
     }
     "write and replay with persistAll less than partition size" in {
       val persistenceId = UUID.randomUUID().toString
-      val processorAtomic = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
+      val processorAtomic =
+        system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
 
       processorAtomic ! List("a-1", "a-2", "a-3", "a-4")
       1L to 4L foreach { i =>
         expectMsgAllOf(s"a-${i}", i, false)
       }
 
-      val processor2 = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
+      val processor2 =
+        system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
       1L to 4L foreach { i =>
         expectMsgAllOf(s"a-${i}", i, true)
       }
@@ -218,7 +231,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
       val probe = TestProbe()
       val deleteProbe = TestProbe()
       subscribeToRangeDeletion(deleteProbe)
-      val processorAtomic = system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
+      val processorAtomic =
+        system.actorOf(Props(classOf[ProcessorAtomic], persistenceId, self))
 
       processorAtomic ! List("a-1", "a-2", "a-3", "a-4", "a-5", "a-6")
       1L to 6L foreach { i =>
@@ -236,7 +250,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
   "A processor" should {
     "recover from a snapshot with follow-up messages" in {
       val persistenceId = UUID.randomUUID().toString
-      val processor1 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor1 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       processor1 ! "a"
       expectMsg("updated-a-1")
       processor1 ! "snap"
@@ -260,7 +275,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
         expectMsg(s"updated-a-${i}")
       }
 
-      val processor2 = system.actorOf(Props(classOf[ProcessorCNoRecover], persistenceId, testActor, Recovery(toSequenceNr = 3L)))
+      val processor2 =
+        system.actorOf(Props(classOf[ProcessorCNoRecover], persistenceId, testActor, Recovery(toSequenceNr = 3L)))
       expectMsg("offered-a-1")
       expectMsg("updated-a-2")
       expectMsg("updated-a-3")
@@ -269,20 +285,23 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
     }
     "recover from a snapshot without follow-up messages inside a partition" in {
       val persistenceId = UUID.randomUUID().toString
-      val processor1 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor1 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       processor1 ! "a"
       expectMsg("updated-a-1")
       processor1 ! "snap"
       expectMsg("snapped-a-1")
 
-      val processor2 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor2 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       expectMsg("offered-a-1")
       processor2 ! "b"
       expectMsg("updated-b-2")
     }
     "recover from a snapshot without follow-up messages at a partition boundary (where next partition is invalid)" in {
       val persistenceId = UUID.randomUUID().toString
-      val processor1 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor1 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       1L to 5L foreach { i =>
         processor1 ! "a"
         expectMsg(s"updated-a-${i}")
@@ -290,7 +309,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
       processor1 ! "snap"
       expectMsg("snapped-a-5")
 
-      val processor2 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor2 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       expectMsg("offered-a-5")
       processor2 ! "b"
       expectMsg("updated-b-6")
@@ -300,7 +320,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
       val deleteProbe = TestProbe()
       subscribeToRangeDeletion(deleteProbe)
 
-      val processor1 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor1 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       1L to 5L foreach { i =>
         processor1 ! "a"
         expectMsg(s"updated-a-${i}")
@@ -314,7 +335,8 @@ class FoundationDbIntegrationSpec extends TestKit(ActorSystem("FoundationDbInteg
       processor1 ! DeleteTo(6L)
       awaitRangeDeletion(deleteProbe)
 
-      val processor2 = system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
+      val processor2 =
+        system.actorOf(Props(classOf[ProcessorC], persistenceId, testActor))
       expectMsg("offered-a-5")
       processor2 ! "b"
       expectMsg("updated-b-7") // no longer re-using sequence numbers

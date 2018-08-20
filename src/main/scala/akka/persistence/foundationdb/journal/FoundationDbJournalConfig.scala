@@ -37,4 +37,6 @@ class FoundationDbJournalConfig(system: ActorSystem, config: Config) extends Fou
         throw new IllegalArgumentException(s"Unknown tag storing policy: $unknown")
     }
   }
+
+  val checkJournalCorruption = config.getBoolean("check-journal-corruption")
 }

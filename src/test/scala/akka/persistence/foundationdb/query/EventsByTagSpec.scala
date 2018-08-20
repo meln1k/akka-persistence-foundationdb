@@ -1,5 +1,6 @@
 ///*
 // * Copyright (C) 2016-2017 Lightbend Inc. <http://www.lightbend.com>
+// * Copyright (C) 2018 Nikita Melkozerov. <n.melkozerov at gmail dot com>
 // */
 //
 //package akka.persistence.cassandra.query
@@ -11,9 +12,8 @@
 //import akka.actor.{ ActorSystem, PoisonPill, Props }
 //import akka.event.Logging.Warning
 //import akka.persistence.{ PersistentActor, PersistentRepr }
-//import akka.persistence.cassandra.{ CassandraLifecycle, EventWithMetaData }
-//import akka.persistence.cassandra.journal.{ CassandraJournalConfig, CassandraStatements, Day }
-//import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
+//import akka.persistence.foundationdb.{ FoundationDbLifecycle }
+//import akka.persistence.foundationdb.query.scaladsl.FoundationDbReadJournal
 //import akka.persistence.journal.{ Tagged, WriteEventAdapter }
 //import akka.persistence.query.scaladsl.{ CurrentEventsByTagQuery, EventsByTagQuery }
 //import akka.persistence.query.{ EventEnvelope, NoOffset, PersistenceQuery, TimeBasedUUID }
@@ -21,7 +21,6 @@
 //import akka.stream.ActorMaterializer
 //import akka.stream.testkit.scaladsl.TestSink
 //import akka.testkit.{ ImplicitSender, TestKit, TestProbe }
-//import com.datastax.driver.core.Cluster
 //import com.typesafe.config.{ Config, ConfigFactory }
 //import org.scalatest.{ BeforeAndAfterEach, Matchers, WordSpecLike }
 //
@@ -39,7 +38,7 @@
 //    akka.loglevel = INFO
 //    akka.actor.serialize-messages = off
 //    akka.actor.warn-about-java-serializer-usage = off
-//    cassandra-journal {
+//    foundationdb-journal {
 //      #target-partition-size = 5
 //      keyspace=$keyspaceName
 //
@@ -59,14 +58,8 @@
 //        time-to-live = 1d
 //      }
 //    }
-//
-//    cassandra-query-journal {
-//      refresh-interval = 500ms
-//      max-buffer-size = 50
-//      first-time-bucket = "${today.minusDays(5).format(firstBucketFormat)}"
-//    }
 //    """
-//  ).withFallback(CassandraLifecycle.config)
+//  ).withFallback(FoundationDbLifecycle.config)
 //
 //  val strictConfig = ConfigFactory.parseString(
 //    s"""

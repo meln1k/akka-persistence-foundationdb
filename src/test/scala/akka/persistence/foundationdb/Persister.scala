@@ -6,7 +6,7 @@
 package akka.persistence.foundationdb
 
 import akka.actor.ActorRef
-import akka.persistence.{ PersistentActor, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer }
+import akka.persistence.{PersistentActor, SaveSnapshotFailure, SaveSnapshotSuccess, SnapshotOffer}
 import akka.persistence.foundationdb.Persister._
 
 object Persister {
@@ -40,13 +40,13 @@ class Persister(override val persistenceId: String, probe: Option[ActorRef] = No
     case SaveSnapshotFailure(_, _) =>
       snapshotAck.foreach(_ ! SnapshotNack)
       snapshotAck = None
-    case msg => persist(msg) { _ =>
-      probe.foreach(_ ! msg)
-    }
+    case msg =>
+      persist(msg) { _ =>
+        probe.foreach(_ ! msg)
+      }
   }
 
   override protected def onRecoveryFailure(cause: Throwable, event: Option[Any]): Unit = {
     probe.foreach(_ ! cause)
   }
 }
-

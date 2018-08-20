@@ -1,6 +1,5 @@
 package akka.persistence.foundationdb.snapshot
 
-import akka.event.{Logging, LoggingAdapter}
 import akka.persistence.foundationdb.journal.{Key, KeySerializer}
 import akka.persistence.foundationdb.{Directories, FoundationDbPluginConfig}
 import akka.persistence.foundationdb.layers.{BlobLayer, ChunkedValueAssembler}
@@ -14,7 +13,6 @@ import akka.serialization.SerializationExtension
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
 import akka.stream.scaladsl.Sink
 import com.apple.foundationdb.{KeySelector, StreamingMode}
-import com.apple.foundationdb.directory.DirectorySubspace
 import com.apple.foundationdb.tuple.Tuple
 import com.typesafe.config.Config
 
@@ -29,10 +27,10 @@ class FoundationDbSnapshotStore(cfg: Config) extends SnapshotStore {
 
 //  import config._
 
-
   val fdbSerializer = new FdbSerializer(serialization)
 
-  implicit val dispatcher = context.system.dispatchers.lookup("foundationdb-plugin-default-dispatcher")
+  implicit val dispatcher =
+    context.system.dispatchers.lookup("foundationdb-plugin-default-dispatcher")
 
   implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
@@ -50,28 +48,33 @@ class FoundationDbSnapshotStore(cfg: Config) extends SnapshotStore {
 
   val keySerializer = new KeySerializer(directories)
 
-
   private val chunkedByteStringReader = ChunkedValueAssembler()
 
-  def serializeSnapshot(snapshot: Snapshot): Array[Byte] = serialization.findSerializerFor(snapshot).toBinary(snapshot)
+  def serializeSnapshot(snapshot: Snapshot): Array[Byte] =
+    serialization.findSerializerFor(snapshot).toBinary(snapshot)
 
-  def deserializeSnapshot(bytes: Array[Byte]): Snapshot = serialization.deserialize(bytes, classOf[Snapshot]).get
+  def deserializeSnapshot(bytes: Array[Byte]): Snapshot =
+    serialization.deserialize(bytes, classOf[Snapshot]).get
 
-  override def loadAsync(persistenceId: String, criteria: SnapshotSelectionCriteria): Future[Option[SelectedSnapshot]] = {
+  override def loadAsync(persistenceId: String,
+                         criteria: SnapshotSelectionCriteria): Future[Option[SelectedSnapshot]] = {
     session.readAsync { implicit tx =>
+      val from = keySerializer
+        .snapshot(persistenceId, criteria.minSequenceNr, criteria.minTimestamp)
+        .bytes
 
+      val to = keySerializer
+        .snapshot(persistenceId, criteria.maxSequenceNr, criteria.maxTimestamp + 1)
+        .bytes
 
-      val from = keySerializer.snapshot(persistenceId, criteria.minSequenceNr, criteria.minTimestamp).value.toArray
-
-      val to = keySerializer.snapshot(persistenceId, criteria.maxSequenceNr, criteria.maxTimestamp+1).value.toArray
-
-      RangeRead.rangeSource(
-        begin = KeySelector.firstGreaterOrEqual(from),
-        end = KeySelector.firstGreaterOrEqual(to),
-        limit = 1,
-        reverse = true,
-        mode = StreamingMode.EXACT
-      )
+      RangeRead
+        .rangeSource(
+          begin = KeySelector.firstGreaterOrEqual(from),
+          end = KeySelector.firstGreaterOrEqual(to),
+          limit = 1,
+          reverse = true,
+          mode = StreamingMode.EXACT
+        )
         .via(chunkedByteStringReader)
         .map { assembled =>
           val tuple = Tuple.fromBytes(assembled.key.toArray)
@@ -98,7 +101,9 @@ class FoundationDbSnapshotStore(cfg: Config) extends SnapshotStore {
   }
 
   override def deleteAsync(metadata: SnapshotMetadata): Future[Unit] = {
-    val key = keySerializer.snapshot(metadata.persistenceId, metadata.sequenceNr: java.lang.Long, metadata.timestamp: java.lang.Long)
+    val key = keySerializer.snapshot(metadata.persistenceId,
+                                     metadata.sequenceNr: java.lang.Long,
+                                     metadata.timestamp: java.lang.Long)
     session.runAsync { implicit tx =>
       tx.clear(key.subspace.range(key.tuple))
       Future.successful(())
@@ -106,8 +111,12 @@ class FoundationDbSnapshotStore(cfg: Config) extends SnapshotStore {
   }
 
   override def deleteAsync(persistenceId: String, criteria: SnapshotSelectionCriteria): Future[Unit] = {
-    val from = keySerializer.snapshot(persistenceId, criteria.minSequenceNr, criteria.minTimestamp).value.toArray
-    val to = keySerializer.snapshot(persistenceId, criteria.maxSequenceNr, criteria.maxTimestamp+1).value.toArray
+    val from = keySerializer
+      .snapshot(persistenceId, criteria.minSequenceNr, criteria.minTimestamp)
+      .bytes
+    val to = keySerializer
+      .snapshot(persistenceId, criteria.maxSequenceNr, criteria.maxTimestamp + 1)
+      .bytes
     session.runAsync { implicit tx =>
       tx.clear(from, to)
       Future.successful(())
