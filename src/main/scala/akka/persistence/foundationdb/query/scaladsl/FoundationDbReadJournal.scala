@@ -17,7 +17,7 @@ import akka.stream._
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.{Done, NotUsed}
 import com.apple.foundationdb.{FDBException, KeySelector, KeyValue, ReadTransaction, StreamingMode, Transaction}
-import com.apple.foundationdb.tuple.Tuple
+import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
 import com.typesafe.config.Config
 
 import scala.async.Async.{async, await}
@@ -27,7 +27,6 @@ import scala.concurrent.{Future, Promise}
 class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
     extends ReadJournal
     with CurrentPersistenceIdsQuery
-    with PersistenceIdsQuery
     with EventsByPersistenceIdQuery
     with CurrentEventsByPersistenceIdQuery
     with EventsByTagQuery
@@ -42,8 +41,6 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
   private val writePluginId = cfg.getString("write-plugin")
 
   private val config = new FoundationDbReadJournalConfig(system, system.settings.config.getConfig(writePluginId))
-
-  import config._
 
   private val log: LoggingAdapter = Logging(system, getClass)
 
@@ -62,24 +59,25 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
   private[akka] val keySerializerFuture: Future[KeySerializer] =
     directoriesFuture.map(d => new KeySerializer(d))
 
-  def watch(key: Key)(implicit tx: Transaction): Future[Done] = {
+  private def watch(key: Key)(implicit tx: Transaction): Future[Done] = {
     tx.watch(key.bytes).toScala.map(_ => Done)
   }
 
-  val chunkAssembler = ChunkedValueAssembler()
-
-  override def persistenceIds(): Source[String, NotUsed] = ???
+  private val chunkAssembler = ChunkedValueAssembler()
 
   override def currentPersistenceIds(): Source[String, NotUsed] = {
-//    val futureSource = directoriesFuture.map { directories =>
-//      val range = directories.maxSeqNr.range()
-//      RangeRead.longRunningRangeSource(range, None).map { kv =>
-//        val persistentId = Tuple.fromBytes(kv.getKey).getString(1)
-//        persistentId
-//      }
-//    }
-//    Source.fromFutureSource(futureSource).mapMaterializedValue(_ => NotUsed)
-    ???
+    val f = async {
+      val directories = await(directoriesFuture)
+      implicit val db = await(session.underlying())
+
+      val range = directories.maxSeqNr.range()
+      RangeRead.longRunningRangeSource(range, None).map { kv =>
+        val persistentId = Tuple.fromBytes(kv.getKey).getString(1)
+        persistentId
+      }
+    }
+
+    Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
   }
 
   override def eventsByPersistenceId(persistenceId: String,
@@ -109,11 +107,10 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
               fdbTr
           }
         }
-        .zipWithIndex
         .flatMapConcat {
-          case (FdbTransaction(tr, trDone), trNr) =>
+          case FdbTransaction(tr, trDone) =>
             implicit val transaction = tr
-            val begin = if (trNr > 0) {
+            val begin = if (currentSeqNo != fromSequenceNr) {
               keySerializer.message(persistenceId, currentSeqNo + 1).bytes
             } else {
               keySerializer.message(persistenceId, currentSeqNo).bytes
@@ -170,7 +167,7 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
     Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
   }
 
-  val eventsByPersistenceIdFlow: Flow[KeyValue, EventEnvelope, NotUsed] = {
+  private val eventsByPersistenceIdFlow: Flow[KeyValue, EventEnvelope, NotUsed] = {
     Flow[KeyValue]
       .via(chunkAssembler)
       .map {
@@ -185,9 +182,9 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
       }
   }
 
-  case class FdbTransaction(tx: Transaction, dbCompleteion: Promise[Done])
+  private case class FdbTransaction(tx: Transaction, dbCompleteion: Promise[Done])
 
-  def getTransaction(): Future[FdbTransaction] = {
+  private def getTransaction(): Future[FdbTransaction] = {
     val p = Promise[Transaction]()
     val done = Promise[Done]()
 
@@ -225,13 +222,25 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
               fdbTr
           }
         }
-        .zipWithIndex
         .flatMapConcat {
-          case (FdbTransaction(tr, trDone), trNr) =>
+          case FdbTransaction(tr, trDone) =>
             implicit val transaction = tr
             val (begin, end) = currentOffset match {
               case versionstamp: VersionstampOffset =>
-                val begin = keySerializer.tag(tag, versionstamp.value).bytes
+                val begin = if (currentOffset != offset) {
+                  keySerializer
+                    .tag(
+                      tag,
+                      Versionstamp.complete(
+                        versionstamp.value.getTransactionVersion,
+                        versionstamp.value.getUserVersion + 1
+                      ) // we need to skip the current event
+                    )
+                    .bytes
+                } else {
+                  keySerializer.tag(tag, versionstamp.value).bytes
+                }
+
                 val end = tagsDir.range(Tuple.from(tag)).end
                 begin -> end
 
@@ -245,14 +254,10 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                 throw new IllegalArgumentException(
                   "FoundationDb does not support " + offset.getClass.getSimpleName + " offsets")
             }
-            val beginSelector = if (trNr > 0) {
-              KeySelector.firstGreaterThan(begin)
-            } else {
-              KeySelector.firstGreaterOrEqual(begin)
-            }
+
             val source = RangeRead
               .rangeSource(
-                begin = beginSelector,
+                begin = KeySelector.firstGreaterOrEqual(begin),
                 end = KeySelector.firstGreaterOrEqual(end),
                 mode = StreamingMode.WANT_ALL
               )
@@ -322,6 +327,7 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                   )
                 }.orElse { // no persistentRepr for a given persistenceId -> seqNr, looks like the event was deleted, let's remove it from the tag too
                   session.runAsync { tr =>
+                    log.info(s"no event at $persistenceId $sequenceNr, cleaning tag $tagKey")
                     tr.clear(tagKey.bytes)
                     Future.successful(Done)
                   }

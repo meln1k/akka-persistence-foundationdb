@@ -15,7 +15,13 @@ private[foundationdb] sealed trait Key {
 trait VersionstampedKey extends Key {
   def versionstamp: Versionstamp
 
-  override def bytes: Array[Byte] = subspace.packWithVersionstamp(tuple)
+  override def bytes: Array[Byte] = {
+    if (versionstamp.isComplete) {
+      subspace.pack(tuple)
+    } else {
+      subspace.packWithVersionstamp(tuple)
+    }
+  }
 }
 
 private[foundationdb] final case class MessageKey(subspace: Subspace, tuple: Tuple) extends Key {
