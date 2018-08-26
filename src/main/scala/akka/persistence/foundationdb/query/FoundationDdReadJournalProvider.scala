@@ -18,7 +18,7 @@ class FoundationDdReadJournalProvider(system: ExtendedActorSystem, config: Confi
         throw e
     }
 
-//    override val javadslReadJournal = () => new ReadJournal {}
+  //todo implement java jounal
   override def javadslReadJournal(): javadsl.ReadJournal =
     new javadsl.ReadJournal {}
 }

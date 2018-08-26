@@ -20,7 +20,7 @@ import scala.util.{Failure, Success, Try}
 import scala.compat.java8.FutureConverters._
 import scala.util.control.NonFatal
 import akka.event.{Logging, LoggingAdapter}
-import akka.persistence.foundationdb.{CompactTag, Directories, TagType}
+import akka.persistence.foundationdb.{CompactTag, Directories, RichTag, TagType}
 import akka.persistence.foundationdb.serialization.{FdbSerializer, SerializedMessage}
 import akka.persistence.foundationdb.session.FoundationDbSession
 
@@ -61,22 +61,6 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
   private val chunkedByteStringReader = ChunkedValueAssembler()
 
-//  def insertCompactTag(tag: String, persistenceId: String, sequenceNr: Long, messageNr: Int)(implicit tr: Transaction): Unit = {
-//    tr.mutate(
-//      MutationType.SET_VERSIONSTAMPED_VALUE,
-//      directories.tagWatches.pack(Tuple.from(tag)),
-//      ByteString.newBuilder
-//        .putBytes(Versionstamp.incomplete(messageNr).getBytes)
-//        .result()
-//        .toArray
-//    )
-//    tr.mutate(
-//      MutationType.SET_VERSIONSTAMPED_KEY,
-//      directories.tags.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr))),
-//      persistentReprId2Tuple(persistenceId, sequenceNr).pack()
-//    )
-//  }
-
   def insertTag(tag: String, tagType: TagType, messageNr: Int)(implicit tr: Transaction): Unit = {
     tr.mutate(
       MutationType.SET_VERSIONSTAMPED_VALUE,
@@ -93,35 +77,9 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     )
   }
 
-//  def insertRichTag(tr: Transaction, tag: String, persistentRepr: PersistentRepr, messageNr: Int): Unit = {
-//    val shardId = TagWatchShards.get(tag).map(s => persistentRepr.persistenceId.hashCode % s).getOrElse(0)
-//    tr.mutate(
-//      MutationType.SET_VERSIONSTAMPED_VALUE,
-//      tagWatchKey(directories.tagWatches, tag, shardId),
-//      ByteString.newBuilder
-//        .putBytes(Versionstamp.incomplete(messageNr).getBytes)
-//        .result()
-//        .toArray
-//    )
-//    tr.mutate(
-//      MutationType.SET_VERSIONSTAMPED_KEY,
-//      directories.tags.packWithVersionstamp(Tuple.from(tag, Versionstamp.incomplete(messageNr), EVENT_TAG_RICH: java.lang.Long)),
-//      Tuple.from(fdbSerializer.persistentRepr2Bytes(persistentRepr)).pack()
-//    )
-
-//    ???
-//  }
-
-  def insertCompactMessage(persistentRepr: PersistentRepr)(implicit tx: Transaction): Unit = {
-    val serializedMessage =
-      fdbSerializer.serializePersistentRepr(persistentRepr)
+  def insertMessage(persistentRepr: PersistentRepr)(implicit tx: Transaction): Unit = {
+    val serializedMessage = fdbSerializer.serializePersistentRepr(persistentRepr)
     writeSerializedMessage(serializedMessage)
-  }
-
-  def insertRichMessage(tr: Transaction, persistentRepr: PersistentRepr, messageNr: Int): Unit = {
-//    val serializedMessage = fdbSerializer.serializePersistentRepr(persistentRepr, Rich(messageNr))
-//    writeSerializedMessage(tr, serializedMessage)
-    ???
   }
 
   // writing the serialized message using (directoryØ, persistenceId, seqNr, chunkNr) -> binary chunk
@@ -130,50 +88,58 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
     BlobLayer.writeChunked(key, serializedMessage.payload)
   }
 
-  val storePersistentRepr: (Transaction, PersistentRepr, Set[String], Int) => Unit =
+  def storePersistentRepr(persistentRepr: PersistentRepr, tags: Set[String], messageNr: Int)(
+      implicit tr: Transaction): Unit =
     tagStoringPolicy match {
-//      case TagStoringPolicy.DefaultCompact(richTags) =>
-//        (tr, persistentRepr, tags, messageNr) =>
-//        val currentRichTags = richTags intersect tags
-//        val noRichTags = currentRichTags.isEmpty
-//        val currentCompactTags = if (noRichTags) {
-//          tags
-//        } else {
-//          tags -- richTags
-//        }
-//        currentRichTags.foreach(richTag => insertRichTag(tr, richTag, persistentRepr, messageNr))
-//        currentCompactTags.foreach(compactTag => insertCompactTag(tr, compactTag, persistentRepr.persistenceId, persistentRepr.sequenceNr, messageNr))
-//        if (noRichTags) {
-//          insertCompactMessage(tr, persistentRepr)
-//        } else {
-//          insertRichMessage(tr, persistentRepr, messageNr)
-//        }
+      case TagStoringPolicy.DefaultCompact(richTags) =>
+        val currentRichTags = richTags intersect tags
+        val noRichTags = currentRichTags.isEmpty
+        val currentCompactTags = if (noRichTags) {
+          tags
+        } else {
+          tags -- richTags
+        }
+        currentRichTags.foreach { richTag =>
+          val tagType = RichTag(fdbSerializer.persistentRepr2Bytes(persistentRepr))
+          insertTag(richTag, tagType, messageNr)
+        }
+        currentCompactTags.foreach { compactTag =>
+          val tagType = CompactTag(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+          insertTag(compactTag, tagType, messageNr)
+        }
+        insertMessage(persistentRepr)
 
       case TagStoringPolicy.AlwaysCompact =>
-        (tr, persistentRepr, tags, messageNr) =>
-          tags.foreach { tag =>
-            val tagType = CompactTag(persistentRepr.persistenceId, persistentRepr.sequenceNr)
-            insertTag(tag, tagType, messageNr)(tr)
-          }
-          insertCompactMessage(persistentRepr)(tr)
+        tags.foreach { tag =>
+          val tagType = CompactTag(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+          insertTag(tag, tagType, messageNr)
+        }
+        insertMessage(persistentRepr)
 
-//      case TagStoringPolicy.DefaultRich(compactTags) =>
-//        (tr, persistentRepr, tags, messageNr) =>
-//        val currentCompactTags = compactTags intersect tags
-//        val noCompactTags = currentCompactTags.isEmpty
-//        val currentRichTags = if (noCompactTags) {
-//          tags
-//        } else {
-//          tags -- compactTags
-//        }
-//        currentCompactTags.foreach(compactTag => insertCompactTag(tr, compactTag, persistentRepr.persistenceId, persistentRepr.sequenceNr, messageNr))
-//        currentRichTags.foreach(richTag => insertRichTag(tr, richTag, persistentRepr, messageNr))
-//        insertRichMessage(tr, persistentRepr, messageNr)
-//
-//      case TagStoringPolicy.AlwaysRich =>
-//        (tr, persistentRepr, tags, messageNr) =>
-//        tags.foreach(tag => insertRichTag(tr, tag, persistentRepr, messageNr))
-//        insertRichMessage(tr, persistentRepr, messageNr)
+      case TagStoringPolicy.DefaultRich(compactTags) =>
+        val currentCompactTags = compactTags intersect tags
+        val noCompactTags = currentCompactTags.isEmpty
+        val currentRichTags = if (noCompactTags) {
+          tags
+        } else {
+          tags -- compactTags
+        }
+        currentCompactTags.foreach { compactTag =>
+          val tagType = CompactTag(persistentRepr.persistenceId, persistentRepr.sequenceNr)
+          insertTag(compactTag, tagType, messageNr)
+        }
+        currentRichTags.foreach { richTag =>
+          val tagType = RichTag(fdbSerializer.persistentRepr2Bytes(persistentRepr))
+          insertTag(richTag, tagType, messageNr)
+        }
+        insertMessage(persistentRepr)
+
+      case TagStoringPolicy.AlwaysRich =>
+        tags.foreach { tag =>
+          val tagType = RichTag(fdbSerializer.persistentRepr2Bytes(persistentRepr))
+          insertTag(tag, tagType, messageNr)
+        }
+        insertMessage(persistentRepr)
     }
 
   def storeMaxSequenceNr(persistentId: String, sequenceNr: Long)(implicit tr: Transaction) = {
@@ -216,7 +182,7 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
                 (persistentRepr, Set.empty[String])
             }
 
-            storePersistentRepr(tr, prWithoutTags, tags, messageNr.toInt)
+            storePersistentRepr(prWithoutTags, tags, messageNr.toInt)
             storeMaxSequenceNr(persistentRepr.persistenceId, persistentRepr.sequenceNr)
           case false =>
             tr.cancel()
@@ -240,7 +206,7 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
           case _ =>
             (persistentRepr, Set.empty[String])
         }
-        storePersistentRepr(tr, prWithoutTags, tags, messageNr)
+        storePersistentRepr(prWithoutTags, tags, messageNr)
         storeMaxSequenceNr(persistentRepr.persistenceId, persistentRepr.sequenceNr)
     }
     Future.successful(Done)
@@ -270,21 +236,15 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
   }
 
   override def asyncDeleteMessagesTo(persistenceId: String, toSequenceNr: Long): Future[Unit] = {
-    tagStoringPolicy match {
-      case TagStoringPolicy.AlwaysCompact =>
-        val normalizedSeqNo = toSequenceNr match {
-          case Long.MaxValue => toSequenceNr
-          case _             => toSequenceNr + 1
-        }
-        session.runAsync { tr =>
-          val from = keySerializer.message(persistenceId, 0L).bytes
-          val to = keySerializer.message(persistenceId, normalizedSeqNo).bytes
-          tr.clear(from, to)
-          Future.successful(())
-        }
-
-      case _ =>
-        throw new UnsupportedOperationException("can only delete from AlwaysCompact tags")
+    val normalizedSeqNo = toSequenceNr match {
+      case Long.MaxValue => toSequenceNr
+      case _             => toSequenceNr + 1
+    }
+    session.runAsync { tr =>
+      val from = keySerializer.message(persistenceId, 0L).bytes
+      val to = keySerializer.message(persistenceId, normalizedSeqNo).bytes
+      tr.clear(from, to)
+      Future.successful(())
     }
   }
 

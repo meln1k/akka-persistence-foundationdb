@@ -23,8 +23,11 @@ Journal plugin
 
 - All operations required by the Akka Persistence [journal plugin API](https://doc.akka.io/docs/akka/current/scala/persistence.html#journal-plugin-api) are fully supported.
 - [Persistence Query](https://doc.akka.io/docs/akka/current/scala/persistence-query.html) support by `FoundationDbReadJournal`
-- **Extra safe mode** which disallows journal corruption is enabled by default.
-- Fast and efficient deletions
+- **Extra safe mode** which disallows concurrent event writes and journal corruption is enabled by default.
+- Fast and efficient deletions (takes O(log(n)) time)
+- Two ways to store tags: compact (just a reference to the event journal, uses less space but requires an extra fetch query) 
+or high-performance (a copy of the event with all required data, will consume 2x space however it's extremely fast). It's also 
+possible to switch the tag type at any time. Choose based on your needs!
 
 ### Configuration
 
@@ -38,9 +41,21 @@ This will run the journal with its default settings. The default settings can be
 
 - Detailed tests under failure conditions are still missing.
 - Some tests are still missing.
+- Snapshot size can't be more than 10mb. It's going to be resolved in a future releases.
 
 
 These issues are likely to be resolved in future versions of the plugin.
+
+### Limitations
+- Due to FoundationDB limitations, your event and all tags can't be more than 10mb (actually less, since 10mb is a transaction limit).
+If you find yourself saving more than 10mb in one transaction, please consider splitting your events. While it's possible 
+
+### Event deletion
+
+Please keep in mind that event deletion has a different behavior depending on tag types. If you use compact tags, then 
+tag is a reference to your event. If you delete the event from the journal, tag will point to the empty event and will 
+be automatically cleared at the next eventsByTag query call. At the other hand, if your tag is rich, it will contain 
+the whole event and won't be deleted, so your eventsByTag query will work as expected. To 
 
 Snapshot store plugin
 ---------------------
@@ -62,11 +77,11 @@ Persistence Queries
 
 It implements the following [Persistence Queries](https://doc.akka.io/docs/akka/current/scala/persistence-query.html):
 
-* currentPersistenceIds
-* eventsByPersistenceId, currentEventsByPersistenceId
-* eventsByTag, currentEventsByTag
+* `currentPersistenceIds`, (`persistenceIds` is not implemented yet)
+* `eventsByPersistenceId`, `currentEventsByPersistenceId`
+* `eventsByTag`, `currentEventsByTag`
 
-All live queries are implemented using database push mechanism and don't use any polling at all. It allows very low 
+All live queries are implemented using database push mechanism and don't use polling. It allows very low 
 latencies between the writing event to the journal and it's replication to the query side.
 
 Persistence Query usage example to obtain a stream with all events tagged with "someTag" with Persistence Query:
@@ -74,4 +89,5 @@ Persistence Query usage example to obtain a stream with all events tagged with "
     val queries = PersistenceQuery(system).readJournalFor[FoundationDbReadJournal](FoundationDbReadJournal.Identifier)
     queries.eventsByTag("someTag", Offset.noOffset)
     
-Compared to other journals, there are no limits regarding the amount of tags per event. Feel free to use as many as you wish!
+Compared to other journals, there are no hard limits regarding the amount of tags per event. It's been tested to work with 
+1000 tags per event.

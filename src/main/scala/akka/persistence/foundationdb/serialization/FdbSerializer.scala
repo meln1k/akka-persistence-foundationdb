@@ -7,7 +7,7 @@ import com.google.protobuf.ByteString
 
 class FdbSerializer(serialization: Serialization) {
 
-  private def persistentRepr2Bytes(p: PersistentRepr): Array[Byte] =
+  def persistentRepr2Bytes(p: PersistentRepr): Array[Byte] =
     serialization.serialize(p).get
   def bytes2PersistentRepr(bytes: Array[Byte]): PersistentRepr =
     serialization.deserialize(bytes, classOf[PersistentRepr]).get
