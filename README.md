@@ -10,8 +10,10 @@ Dependencies
 
 To include the latest release of the FoundationDB plugins for **Akka 2.5.x** into your `sbt` project, add the following lines to your `build.sbt` file:
 
+    resolvers += "nmelkozerov at bintray" at "http://dl.bintray.com/nmelkozerov/maven"
+
     libraryDependencies += Seq(
-      "com.github.meln1k" %% "akka-persistence-foundationdb" % "0.1",
+      "com.github.meln1k" %% "akka-persistence-foundationdb" % "0.1.0",
     )
 
 This version of `akka-persistence-foundationdb` depends on Akka 2.5.13. It has been published for Scala 2.12.

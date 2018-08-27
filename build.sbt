@@ -4,7 +4,7 @@ organization := "com.github.meln1k"
 
 name := "akka-persistence-foundationdb"
 
-version := "0.1.0-SNAPSHOT"
+version := "0.1.0"
 
 scalaVersion := "2.12.6"
 
@@ -27,3 +27,5 @@ parallelExecution in Test := false
 scalafmtOnCompile in ThisBuild := true
 
 libraryDependencies ++= akkaPersistenceFoundationDependencies
+
+licenses += ("Apache-2.0", url("https://opensource.org/licenses/Apache-2.0"))
