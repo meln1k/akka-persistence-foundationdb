@@ -50,14 +50,14 @@ These issues are likely to be resolved in future versions of the plugin.
 
 ### Limitations
 - Due to FoundationDB limitations, your event and all tags can't be more than 10mb (actually less, since 10mb is a transaction limit).
-If you find yourself saving more than 10mb in one transaction, please consider splitting your events. While it's possible 
+If you find yourself saving more than 10mb in one transaction, please consider splitting your events. 
 
 ### Event deletion
 
 Please keep in mind that event deletion has a different behavior depending on tag types. If you use compact tags, then 
 tag is a reference to your event. If you delete the event from the journal, tag will point to the empty event and will 
 be automatically cleared at the next eventsByTag query call. At the other hand, if your tag is rich, it will contain 
-the whole event and won't be deleted, so your eventsByTag query will work as expected. To 
+the whole event and won't be deleted, so your eventsByTag query will work as expected.
 
 Snapshot store plugin
 ---------------------
