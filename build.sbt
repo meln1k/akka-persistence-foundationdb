@@ -24,6 +24,8 @@ scalacOptions ++= Seq(
 
 parallelExecution in Test := false
 
+fork in Test := true
+
 scalafmtOnCompile in ThisBuild := true
 
 libraryDependencies ++= akkaPersistenceFoundationDependencies
