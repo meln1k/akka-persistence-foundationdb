@@ -6,7 +6,6 @@
 package akka.persistence.foundationdb.journal
 
 import java.util.UUID
-
 import scala.concurrent.duration._
 import akka.actor._
 import akka.persistence._
@@ -14,8 +13,9 @@ import akka.persistence.foundationdb.FoundationDbLifecycle
 import akka.testkit._
 import com.apple.foundationdb.Database
 import com.typesafe.config.ConfigFactory
-import org.scalatest._
 import com.apple.foundationdb.{Range => FdbRange}
+import org.scalatest.matchers.must.Matchers
+import org.scalatest.wordspec.AnyWordSpecLike
 
 object FoundationDbIntegrationSpec {
   val config = ConfigFactory
@@ -23,6 +23,7 @@ object FoundationDbIntegrationSpec {
       s"""
       |akka.persistence.publish-confirmations = on
       |akka.persistence.publish-plugin-commands = on
+      |akka.actor.serialize-messages = off
       |foundationdb-journal.directory = "FoundationDbIntegrationSpec"
     """.stripMargin
     )
@@ -109,7 +110,7 @@ import FoundationDbIntegrationSpec._
 class FoundationDbIntegrationSpec
     extends TestKit(ActorSystem("FoundationDbIntegrationSpec", config))
     with ImplicitSender
-    with WordSpecLike
+    with AnyWordSpecLike
     with Matchers
     with FoundationDbLifecycle {
 

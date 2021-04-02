@@ -13,15 +13,17 @@ import akka.testkit.{ImplicitSender, TestKit}
 import akka.util.ByteString
 import com.apple.foundationdb.KeyValue
 import com.apple.foundationdb.tuple.Tuple
-import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.concurrent.ScalaFutures
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpecLike
 
 import scala.concurrent.ExecutionContext.Implicits.global
 
 class ChunkedValueAssemblerSpec
     extends TestKit(ActorSystem("ChunkedByteStringReaderSpec"))
     with ImplicitSender
-    with WordSpecLike
+    with AnyWordSpecLike
     with Matchers
     with BeforeAndAfterAll
     with ScalaFutures {
@@ -101,7 +103,7 @@ class ChunkedValueAssemblerSpec
       }
       val assembledPayloads = messages.map {
         case (k, v) =>
-          AssembledPayload(ByteString.fromArray(Tuple.from(k).pack()), ByteString(v)),
+          AssembledPayload(ByteString.fromArray(Tuple.from(k).pack()), ByteString(v))
       }
 
       val result = Source(keyValues)

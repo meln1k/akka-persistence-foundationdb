@@ -20,7 +20,6 @@ import com.apple.foundationdb.{FDBException, KeySelector, KeyValue, ReadTransact
 import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
 import com.typesafe.config.Config
 
-import scala.async.Async.{async, await}
 import scala.compat.java8.FutureConverters._
 import scala.concurrent.{Future, Promise}
 
@@ -66,18 +65,17 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
   private val chunkAssembler = ChunkedValueAssembler()
 
   override def currentPersistenceIds(): Source[String, NotUsed] = {
-    val f = async {
-      val directories = await(directoriesFuture)
-      implicit val db = await(session.underlying())
-
-      val range = directories.maxSeqNr.range()
-      RangeRead.longRunningRangeSource(range, None).map { kv =>
+    val f = for {
+      directories <- directoriesFuture
+      db <- session.underlying()
+      range = directories.maxSeqNr.range()
+    } yield
+      RangeRead.longRunningRangeSource(range, None)(db, ec).map { kv =>
         val persistentId = Tuple.fromBytes(kv.getKey).getString(1)
         persistentId
       }
-    }
 
-    Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
+    Source.futureSource(f).mapMaterializedValue(_ => NotUsed)
   }
 
   override def eventsByPersistenceId(persistenceId: String,
@@ -85,20 +83,17 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                                      toSequenceNr: Long): Source[EventEnvelope, NotUsed] = {
     require(fromSequenceNr <= toSequenceNr, "fromSequenceNr must be less or equal to toSequenceNr")
 
-    val f = async {
+    @volatile var currentSeqNo: Long = fromSequenceNr
 
-      val keySerializer = await(keySerializerFuture)
+    val toSeqNrValidated =
+      if (toSequenceNr == Long.MaxValue) toSequenceNr else toSequenceNr + 1
 
-      @volatile var currentSeqNo: Long = fromSequenceNr
+    val (queue, newTagsAvailable) =
+      Source.queue[Done](1, OverflowStrategy.dropNew).preMaterialize()
 
-      val toSeqNrValidated =
-        if (toSequenceNr == Long.MaxValue) toSequenceNr else toSequenceNr + 1
+    queue.offer(Done)
 
-      val (queue, newTagsAvailable) =
-        Source.queue[Done](1, OverflowStrategy.dropNew).preMaterialize()
-
-      queue.offer(Done)
-
+    val f: Future[Source[EventEnvelope, NotUsed]] = keySerializerFuture.map { keySerializer =>
       newTagsAvailable
         .mapAsync(1) { _ =>
           getTransaction().map {
@@ -144,27 +139,27 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                   Source.empty
               })
         }
-
     }
 
-    Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
+    Source.futureSource(f).mapMaterializedValue(_ => NotUsed)
   }
 
   override def currentEventsByPersistenceId(persistenceId: String,
                                             fromSequenceNr: Long,
                                             toSequenceNr: Long): Source[EventEnvelope, NotUsed] = {
-    val f = async {
-      implicit val db = await(session.underlying())
-      val keySerializer = await(keySerializerFuture)
-      val toSeqNrValidated =
-        if (toSequenceNr == Long.MaxValue) toSequenceNr else toSequenceNr + 1
-      val begin = keySerializer.message(persistenceId, fromSequenceNr).bytes
-      val end = keySerializer.message(persistenceId, toSeqNrValidated).bytes
+    val toSeqNrValidated =
+      if (toSequenceNr == Long.MaxValue) toSequenceNr else toSequenceNr + 1
+
+    val f = for {
+      db <- session.underlying()
+      keySerializer <- keySerializerFuture
+      begin = keySerializer.message(persistenceId, fromSequenceNr).bytes
+      end = keySerializer.message(persistenceId, toSeqNrValidated).bytes
+    } yield
       RangeRead
-        .longRunningRangeSource(begin, end, None)
+        .longRunningRangeSource(begin, end, None)(db, ec)
         .via(eventsByPersistenceIdFlow)
-    }
-    Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
+    Source.futureSource(f).mapMaterializedValue(_ => NotUsed)
   }
 
   private val eventsByPersistenceIdFlow: Flow[KeyValue, EventEnvelope, NotUsed] = {
@@ -200,21 +195,18 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
   //todo test that it works with splitting events
   override def eventsByTag(tag: String, offset: Offset): Source[EventEnvelope, NotUsed] = {
 
-    val f = async {
-      val directories = await(directoriesFuture)
+    @volatile var currentOffset: Offset = offset
 
-      val tagsDir = directories.tags
+    val (queue, newTagsAvailable) =
+      Source.queue[Done](1, OverflowStrategy.dropNew).preMaterialize()
 
-      val keySerializer = await(keySerializerFuture)
+    queue.offer(Done)
 
-      @volatile var currentOffset: Offset = offset
-
-      val (queue, newTagsAvailable) =
-        Source.queue[Done](1, OverflowStrategy.dropNew).preMaterialize()
-
-      queue.offer(Done)
-
-      newTagsAvailable
+    val f = for {
+      directories <- directoriesFuture
+      tagsDir = directories.tags
+      keySerializer <- keySerializerFuture
+      result = newTagsAvailable
         .mapAsync(1) { _ =>
           getTransaction().map {
             case fdbTr @ FdbTransaction(tr, _) =>
@@ -281,19 +273,18 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                   Source.empty
               })
         }
+    } yield result
 
-    }
-
-    Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
+    Source.futureSource(f).mapMaterializedValue(_ => NotUsed)
 
   }
 
-  private def getPersistentRepr(persistenceId: String, sequenceNr: Long): Future[Option[PersistentRepr]] = async {
-    val keySerializer = await(keySerializerFuture)
-    val key = keySerializer.message(persistenceId, sequenceNr)
-    val range = key.subspace.range(key.tuple)
-    await {
-      session.readAsync { implicit tr =>
+  private def getPersistentRepr(persistenceId: String, sequenceNr: Long): Future[Option[PersistentRepr]] = {
+    for {
+      keySerializer <- keySerializerFuture
+      key = keySerializer.message(persistenceId, sequenceNr)
+      range = key.subspace.range(key.tuple)
+      result <- session.readAsync { implicit tr =>
         RangeRead
           .rangeSource(
             range = range,
@@ -305,7 +296,7 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
           .map(payload => fdbSerializer.bytes2PersistentRepr(payload.value.toArray))
           .runWith(Sink.headOption)
       }
-    }
+    } yield result
   }
 
   private val eventsByTagFlow: Flow[KeyValue, EventEnvelope, NotUsed] = {
@@ -313,12 +304,13 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
       .via(chunkAssembler)
       .mapAsync(100) {
         case AssembledPayload(key, value) =>
-          async {
-            val keySerializer = await(keySerializerFuture)
-            val tagKey = keySerializer.tag(key)
-            fdbSerializer.bytes2TagType(value.toArray) match {
-              case tag @ CompactTag(persistenceId, sequenceNr) =>
-                await(getPersistentRepr(persistenceId, sequenceNr).map(_.map { persistentRepr =>
+          for {
+            keySerializer <- keySerializerFuture
+            tagKey = keySerializer.tag(key)
+            tag = fdbSerializer.bytes2TagType(value.toArray)
+            result <- tag match {
+              case CompactTag(persistenceId, sequenceNr) =>
+                getPersistentRepr(persistenceId, sequenceNr).map(_.map { persistentRepr =>
                   EventEnvelope(
                     VersionstampOffset(tagKey.versionstamp),
                     persistentRepr.persistenceId,
@@ -332,7 +324,7 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                     Future.successful(Done)
                   }
                   None
-                }))
+                })
 
               case RichTag(payload) =>
                 val persistentRepr = fdbSerializer.bytes2PersistentRepr(payload)
@@ -342,19 +334,20 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
                   persistentRepr.sequenceNr,
                   persistentRepr.payload
                 )
-                Some(envelope)
+                Future.successful(Some(envelope))
             }
-          }
+          } yield result
       }
       .mapConcat(_.toList)
   }
 
   override def currentEventsByTag(tag: String, offset: Offset): Source[EventEnvelope, NotUsed] = {
-    val f = async {
-      implicit val db = await(session.underlying())
-      val keySerializer = await(keySerializerFuture)
-      val tagsDir = await(directoriesFuture).tags
-      val (begin, end) = offset match {
+    val f = for {
+      db <- session.underlying()
+      keySerializer <- keySerializerFuture
+      dirs <- directoriesFuture
+      tagsDir = dirs.tags
+      (begin, end) = offset match {
         case versionstamp: VersionstampOffset =>
           val begin = keySerializer.tag(tag, versionstamp.value).bytes
           val end = tagsDir.range(Tuple.from(tag)).end
@@ -370,12 +363,11 @@ class FoundationDbReadJournal(system: ActorSystem, cfg: Config)
             "FoundationDb does not support " + offset.getClass.getSimpleName + " offsets")
       }
 
-      //since we don't use any watches here, we can just create a new long running source and read it all.
-      RangeRead
-        .longRunningRangeSource(begin, end, None)
+    } yield
+      RangeRead //since we don't use any watches here, we can just create a new long running source and read it all.
+        .longRunningRangeSource(begin, end, None)(db, ec)
         .via(eventsByTagFlow)
-    }
-    Source.fromFutureSource(f).mapMaterializedValue(_ => NotUsed)
+    Source.futureSource(f).mapMaterializedValue(_ => NotUsed)
   }
 }
 

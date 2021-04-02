@@ -4,8 +4,6 @@ import akka.actor.ActorSystem
 
 import com.typesafe.config.Config
 
-import scala.collection.JavaConverters._
-
 class FoundationDbPluginConfig(system: ActorSystem, config: Config) {
 
   val sessionProvider: SessionProvider = SessionProvider(system, config)

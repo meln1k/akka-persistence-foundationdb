@@ -11,7 +11,6 @@ import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.{Database, ReadTransaction, Transaction}
 
 import scala.compat.java8.FutureConverters._
-import scala.async.Async.{async, await}
 import scala.concurrent.Future
 import scala.collection.JavaConverters._
 
@@ -57,34 +56,23 @@ final class FoundationDbSession(
       db.readAsync(tx => transaction(tx).toJava.toCompletableFuture).toScala
     }
 
-  def resolveDirectories(): Future[Directories] = async {
+  def resolveDirectories(): Future[Directories] = {
     import config._
     val directoryLayer = new DirectoryLayer()
-    val db = await(underlying())
-    val pluginDirectory = await(directoryLayer.createOrOpen(db, List(pluginDirectoryName).asJava).toScala)
-    val messagesDirectory = await(
-      pluginDirectory
-        .createOrOpen(db, List(messagesDirectoryName).asJava)
-        .toScala)
-    val sequenceNrDirectory = await(
-      pluginDirectory
-        .createOrOpen(db, List(sequenceNrDirectoryName).asJava)
-        .toScala)
-    val tagsDirectory = await(pluginDirectory.createOrOpen(db, List(tagsDirectoryName).asJava).toScala)
-    val tagWatchesDirectory = await(
-      pluginDirectory
-        .createOrOpen(db, List(tagWatchesDirectoryName).asJava)
-        .toScala)
-    val snapshotDirectory = await(
-      pluginDirectory
-        .createOrOpen(db, List(snapshotsDirectoryName).asJava)
-        .toScala)
-    Directories(pluginDirectory,
-                messagesDirectory,
-                sequenceNrDirectory,
-                tagsDirectory,
-                tagWatchesDirectory,
-                snapshotDirectory)
+    for {
+      db <- underlying()
+      pluginDirectory <- directoryLayer.createOrOpen(db, List(pluginDirectoryName).asJava).toScala
+      messagesDirectory <- pluginDirectory.createOrOpen(db, List(messagesDirectoryName).asJava).toScala
+      sequenceNrDirectory <- pluginDirectory.createOrOpen(db, List(sequenceNrDirectoryName).asJava).toScala
+      tagsDirectory <- pluginDirectory.createOrOpen(db, List(tagsDirectoryName).asJava).toScala
+      tagWatchesDirectory <- pluginDirectory.createOrOpen(db, List(tagWatchesDirectoryName).asJava).toScala
+      snapshotDirectory <- pluginDirectory.createOrOpen(db, List(snapshotsDirectoryName).asJava).toScala
+    } yield
+      Directories(pluginDirectory,
+                  messagesDirectory,
+                  sequenceNrDirectory,
+                  tagsDirectory,
+                  tagWatchesDirectory,
+                  snapshotDirectory)
   }
-
 }

@@ -1,6 +1,6 @@
 package akka.persistence.foundationdb.snapshot
 
-import akka.persistence.foundationdb.journal.{Key, KeySerializer}
+import akka.persistence.foundationdb.journal.KeySerializer
 import akka.persistence.foundationdb.{Directories, FoundationDbPluginConfig}
 import akka.persistence.foundationdb.layers.{BlobLayer, ChunkedValueAssembler}
 import akka.persistence.foundationdb.serialization.FdbSerializer

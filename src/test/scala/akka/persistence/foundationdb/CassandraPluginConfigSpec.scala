@@ -9,10 +9,10 @@ import scala.collection.immutable
 import scala.concurrent.duration._
 import java.net.InetSocketAddress
 import com.typesafe.config.ConfigFactory
-import org.scalatest.MustMatchers
+import org.scalatest.matchers.must.Matchers
 import org.scalatest.prop.TableDrivenPropertyChecks._
 import scala.util.Random
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 import akka.testkit.TestKit
 import akka.actor.ActorSystem
 import scala.concurrent.Await
@@ -35,8 +35,8 @@ object CassandraPluginConfigSpec {
 
 class CassandraPluginConfigSpec
     extends TestKit(ActorSystem("CassandraPluginConfigSpec"))
-    with WordSpecLike
-    with MustMatchers
+    with AnyWordSpecLike
+    with Matchers
     with BeforeAndAfterAll {
 
   "A CassandraPluginConfig" should {}

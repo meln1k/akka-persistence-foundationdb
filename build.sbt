@@ -4,9 +4,9 @@ organization := "com.github.meln1k"
 
 name := "akka-persistence-foundationdb"
 
-version := "0.1.0"
+version := "0.1.1"
 
-scalaVersion := "2.12.7"
+scalaVersion := "2.13.5"
 
 scalacOptions ++= Seq(
   "-encoding",
@@ -14,9 +14,7 @@ scalacOptions ++= Seq(
   "-feature",
   "-unchecked",
   "-deprecation",
-  //"-Xfatal-warnings",
   "-Xlint",
-  "-Yno-adapted-args",
   "-Ywarn-dead-code",
   "-Ywarn-numeric-widen",
   "-Xfuture"

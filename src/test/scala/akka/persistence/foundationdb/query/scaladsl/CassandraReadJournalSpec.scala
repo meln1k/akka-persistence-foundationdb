@@ -6,13 +6,11 @@
 package akka.persistence.foundationdb.query.scaladsl
 
 import java.time.Instant
-
 import scala.concurrent.duration._
 import akka.actor.{ActorSystem, Props}
 import akka.stream.ActorMaterializer
 import akka.testkit.{ImplicitSender, TestKit}
 import com.typesafe.config.ConfigFactory
-import org.scalatest.{Matchers, WordSpecLike}
 import akka.persistence.foundationdb.FoundationDbLifecycle
 import akka.persistence.foundationdb.query.scaladsl.FoundationDbReadJournal
 import akka.persistence.foundationdb.query.TestActor
@@ -25,6 +23,8 @@ import com.apple.foundationdb.Database
 import com.apple.foundationdb.{Range => FdbRange}
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpecLike
 
 import scala.collection.JavaConverters._
 
@@ -63,7 +63,7 @@ class TestTagger extends WriteEventAdapter {
 class FoundationDbReadJournalSpec
     extends TestKit(ActorSystem("ScalaFoundationDbReadJournalSpec", FoundationDbReadJournalSpec.config))
     with ImplicitSender
-    with WordSpecLike
+    with AnyWordSpecLike
     with FoundationDbLifecycle
     with Matchers {
 

@@ -24,7 +24,6 @@ import akka.persistence.foundationdb.{CompactTag, Directories, RichTag, TagType}
 import akka.persistence.foundationdb.serialization.{FdbSerializer, SerializedMessage}
 import akka.persistence.foundationdb.session.FoundationDbSession
 
-import scala.async.Async._
 import scala.concurrent.duration._
 import scala.concurrent.blocking
 import akka.persistence.foundationdb.layers._
@@ -142,7 +141,7 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
         insertMessage(persistentRepr)
     }
 
-  def storeMaxSequenceNr(persistentId: String, sequenceNr: Long)(implicit tr: Transaction) = {
+  def storeMaxSequenceNr(persistentId: String, sequenceNr: Long)(implicit tr: Transaction): Unit = {
     tr.mutate(
       MutationType.MAX,
       keySerializer.maxSequenceNr(persistentId).bytes,
@@ -154,14 +153,16 @@ class FoundationDbJournal(cfg: Config) extends AsyncWriteJournal {
 
   }
 
-  def isWriteSafe(persistentId: String, sequenceNr: Long)(implicit tx: Transaction): Future[Boolean] = async {
+  def isWriteSafe(persistentId: String, sequenceNr: Long)(implicit tx: Transaction): Future[Boolean] = {
     val key = keySerializer.message(persistentId, sequenceNr)
     val firstChunk = key.subspace.pack(key.tuple.add(0))
-    val message = await(tx.get(firstChunk).toScala)
-    message match {
-      case null => true
-      case _    => false
-    }
+    for {
+      message <- tx.get(firstChunk).toScala
+      result = message match {
+        case null => true
+        case _    => false
+      }
+    } yield result
   }
 
   override def postStop(): Unit = {

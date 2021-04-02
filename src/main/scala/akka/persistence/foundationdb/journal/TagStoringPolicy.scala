@@ -1,8 +1,6 @@
 package akka.persistence.foundationdb.journal
 
 import akka.persistence.query.scaladsl.{CurrentEventsByTagQuery, EventsByTagQuery}
-import com.typesafe.config.Config
-import scala.collection.JavaConverters._
 
 sealed trait TagStoringPolicy
 

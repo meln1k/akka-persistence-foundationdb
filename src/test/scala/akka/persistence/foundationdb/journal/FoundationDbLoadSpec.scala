@@ -10,11 +10,12 @@ import akka.persistence._
 import akka.persistence.foundationdb.FoundationDbLifecycle
 import akka.testkit._
 import com.typesafe.config.ConfigFactory
-import org.scalatest._
 
 import scala.concurrent.duration._
 import scala.language.postfixOps
 import com.apple.foundationdb.{Database, Range => FdbRange}
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpecLike
 
 object FoundationDbLoadSpec {
   val config = ConfigFactory
@@ -90,7 +91,7 @@ import akka.persistence.cassandra.journal.FoundationDbLoadSpec._
 class FoundationDbLoadSpec
     extends TestKit(ActorSystem("FoundationDbLoadSpec", config))
     with ImplicitSender
-    with WordSpecLike
+    with AnyWordSpecLike
     with Matchers
     with FoundationDbLifecycle {
 

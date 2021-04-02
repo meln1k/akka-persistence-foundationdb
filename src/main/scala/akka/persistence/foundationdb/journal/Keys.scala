@@ -2,7 +2,6 @@ package akka.persistence.foundationdb.journal
 
 import akka.persistence.foundationdb.Directories
 import akka.util.ByteString
-import com.apple.foundationdb.directory.DirectorySubspace
 import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.{Tuple, Versionstamp}
 
